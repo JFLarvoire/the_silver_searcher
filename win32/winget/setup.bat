@@ -531,18 +531,18 @@ if errorlevel 1 (
   %RETURN% 1
 )
 
-:# Scoop has a very similar mechanism, with shims in the same directory as scoop.cmd.
-for %%p in (scoop.cmd) do set "SCOOP=%%~dp$PATH:p"
-if defined SCOOP if exist "%SCOOP%ag.exe" (
-  %ERROR% Found another instance of ag.exe installed by Scoop. Please uninstall it first using 'scoop uninstall ag' and retry.
-  %PAUSE%
-  %RETURN% 1
-)
 :# Avoid collisions with other package managers
 :# Chocolatey stores a proxy program called a "shim" in "%ChocolateyInstall%\bin".
 :# That shim points to the actual ag.exe installed somewhere outside of the PATH.
 if defined ChocolateyInstall if exist "%ChocolateyInstall%\bin\ag.exe" (
   %ERROR% Found another instance of ag.exe installed by Chocolatey. Please uninstall it first using 'choco uninstall ag' and retry.
+  %PAUSE%
+  %RETURN% 1
+)
+:# Scoop has a very similar mechanism, with shims in the same directory as scoop.cmd.
+for %%p in (scoop.cmd) do set "SCOOP=%%~dp$PATH:p"
+if defined SCOOP if exist "%SCOOP%ag.exe" (
+  %ERROR% Found another instance of ag.exe installed by Scoop. Please uninstall it first using 'scoop uninstall ag' and retry.
   %PAUSE%
   %RETURN% 1
 )
