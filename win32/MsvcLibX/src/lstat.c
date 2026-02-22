@@ -19,6 +19,17 @@
 *    2017-10-05 JFL Removed one huge buffer on stack, to lower stack usage.   *
 *    2018-05-31 JFL Changed dirent2stat() first arg to (const _dirent *).     *
 *    2020-12-15 JFL Added support for IO_REPARSE_TAG_APPEXECLINK.             *
+*    2021-11-29 JFL Prefixed MsvcLibX-specific WIN32 public routines with Mlx.*
+*    2025-12-06 JFL stat() and lstat() are now front ends to the new lstatX(),*
+*                   extending the old lstat() with MlxGetFileAttributesAndID()*
+*                   instead of GetFileAttributesEx() and MlxGetFileID().      *
+*    2026-02-04 JFL Moved the conversion of the Win32 attributes and reparse  *
+*		    tag to a C file type to new routine MlxAttrAndTag2Type(). *
+*    2026-02-11 JFL Decode st_mode flags in the debugging output.             *
+*                   Fixed the setting of st_mode flag S_MOUNT_POINT.	      *
+*                   Moved the APPEXECLINK fix to MlxGetFileAttributesAndIDW().*
+*    2026-02-19 JFL Added a workaround for Win7 VMware VMs reading null	      *
+*		    reparse tags on their host's shared folders.	      *
 *                                                                             *
 *         © Copyright 2016 Hewlett Packard Enterprise Development LP          *
 * Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 *
@@ -36,7 +47,7 @@
 #include "msvclibx.h"
 #include <sys/stat.h>
 #include <dirent.h>
-#include <unistd.h> /* For ResolveLinks() definition */
+#include <unistd.h> /* For MlxResolveLinks() definition */
 #include "debugm.h"
 #include <stdint.h>
 
@@ -106,13 +117,14 @@ int dirent2stat(const _dirent *pDirent, struct _stat *pStat) {
 
 /*---------------------------------------------------------------------------*\
 *                                                                             *
-|   Function	    lstat						      |
+|   Function	    lstatX						      |
 |									      |
-|   Description	    Common definition of all _lstatXY() functions             |
+|   Description	    Common definition of all _statXY() & _lstatXY() functions |
 |									      |
 |   Parameters      const char *path		The symlink name	      |
 |		    struct stat *buf		Output buffer		      |
-|									      |
+|		    BOOL is_lstat		1 = lstat(); 0 = stat()	      |
+|		    							      |
 |   Returns	    0 = Success, -1 = Failure				      |
 |									      |
 |   Notes	    See sys\stat.h for a description of how the stat and      |
@@ -121,35 +133,44 @@ int dirent2stat(const _dirent *pDirent, struct _stat *pStat) {
 |   History								      |
 |    2014-02-06 JFL Created this routine                               	      |
 |    2014-02-28 JFL Added support for UTF-8 pathnames.                 	      |
+|    2026-02-11 JFL Moved the APPEXECLINK fix to MlxGetFileAttributesAndIDW().|
 *									      *
 \*---------------------------------------------------------------------------*/
 
-int lstat(const char *path, struct stat *pStat) {
+#define CONCAT_TOKENS(a, b) a##b
+
+#define CONCAT_TOKENS_VALUE(a, b) CONCAT_TOKENS(a, b)
+
+#define lstatX CONCAT_TOKENS_VALUE(lstat, X)
+
+int lstatX(const char *path, struct stat *pStat, BOOL is_lstat) {
   BOOL bDone;
   DWORD dwAttr;
   WIN32_FILE_ATTRIBUTE_DATA fileData;
   unsigned __int64 qwSize;
-  int bIsJunction = FALSE;
-  int bIsMountPoint = FALSE;
   DWORD dwTag = 0;
   DEBUG_CODE(
   char szTime[100];
+  char szAttrs[250]; /* Enough space for 13 attribute names, averaging 10 chars. each */
   )
   WCHAR *pwszName = NULL;
+  FILE_ID fid;
+  unsigned short wType;
 
-  DEBUG_ENTER((STRINGIZE(lstat) "(\"%s\", 0x%p);\n", path, pStat));
+  /* If (is_lstat is TRUE), the function name is "lstatXXX", else it's "statXXX" */
+  DEBUG_ENTER(("%s(\"%s\", 0x%p);\n", (STRINGIZE(lstat) + !is_lstat), path, pStat));
 
 #if USE_MSVC_STAT
   dwAttr = GetFileAttributes(path);
   DEBUG_PRINTF(("GetFileAttributes() = 0x%lX\n", dwAttr));
   if (dwAttr == INVALID_FILE_ATTRIBUTES) {
     errno = ENOENT;
-    RETURN_INT_COMMENT(-1, ("File does not exist\n"));
+    RETURN_INT_COMMENT(-1, ("errno = %d; // %s\n", errno, strerror(errno)));
   }
 
   if (!(dwAttr & FILE_ATTRIBUTE_REPARSE_POINT)) {
     int iErr = stat(path, pStat);
-    RETURN_INT(iErr);
+    RETURN_INT_COMMENT(iErr, ("errno = %d; // %s\n", errno, strerror(errno)));
   }
 #endif
 
@@ -157,19 +178,22 @@ int lstat(const char *path, struct stat *pStat) {
   pwszName = MultiByteToNewWidePath(CP_UTF8, path);
   if (!pwszName) RETURN_INT_COMMENT(-1, ("errno=%d - %s\n", errno, strerror(errno)));
 
-  bDone = GetFileAttributesExW(pwszName, GetFileExInfoStandard, &fileData);
+  bDone = MlxGetFileAttributesAndIDW(pwszName, &fileData, &fid, is_lstat); /* Superset of GetFileAttributesEx() */
   if (!bDone) {
-    errno = Win32ErrorToErrno();
     free(pwszName);
-    RETURN_INT_COMMENT(-1, ("GetFileAttributesEx(); // Failed\n"));
+    RETURN_INT_COMMENT(-1, ("MlxGetFileAttributesAndID(); // Failed\n"));
   }
-  XDEBUG_PRINTF(("GetFileAttributesEx(); // Success\n"));
   dwAttr = fileData.dwFileAttributes;
   XDEBUG_PRINTF(("dwFileAttributes = 0x%lX\n", dwAttr));
   DEBUG_CODE_IF_ON(Filetime2String(&fileData.ftLastWriteTime, szTime, sizeof(szTime)););
   XDEBUG_PRINTF(("ftLastWriteTime = %s\n", szTime));
   qwSize = ((unsigned __int64)fileData.nFileSizeHigh << 32) | fileData.nFileSizeLow;
   XDEBUG_PRINTF(("nFileSize = %I64d\n", qwSize));
+
+  if (dwAttr & FILE_ATTRIBUTE_REPARSE_POINT) {
+    dwTag = MlxGetReparseTagW(pwszName);
+    if (!dwTag) dwAttr &= ~FILE_ATTRIBUTE_REPARSE_POINT; /* Workaround for Win7 VMware VMs reading null reparse tags on their host's shared folders */
+  }
 
   ZeroMemory(pStat, sizeof(struct stat));
   /* Set times */
@@ -189,45 +213,15 @@ int lstat(const char *path, struct stat *pStat) {
 #define _MAX_FILE_SIZE 0x7FFFFFFFL
   if (qwSize > _MAX_FILE_SIZE) pStat->st_size = (off_t)_MAX_FILE_SIZE;
 #endif
-  /* Standard attributes */
+  /* Standard attributes - Make sure that what is set here is consistent with what readdir() sets in dirent.c */
+  pStat->st_mode = 0;
   /* File type */
-check_attr_again:
-  if (dwAttr & FILE_ATTRIBUTE_REPARSE_POINT) {
-    /* JUNCTIONs and SYMLINKDs both have the FILE_ATTRIBUTE_DIRECTORY flag also set.
-    // Test the FILE_ATTRIBUTE_REPARSE_POINT flag first, to make sure they're seen as symbolic links.
-    //
-    // All symlinks are reparse points, but not all reparse points are symlinks. */
-    dwTag = GetReparseTagU(path);
-    switch (dwTag) {
-      case IO_REPARSE_TAG_MOUNT_POINT:	/* NTFS junction or mount point */
-	{ /* We must read the link to distinguish junctions from mount points. */
-	WCHAR wbuf[WIDE_PATH_MAX];
-	ssize_t n;
-	bIsMountPoint = TRUE;
-	n = readlinkW(pwszName, wbuf, WIDE_PATH_MAX);
-	/* Junction targets are absolute pathnames, starting with a drive letter. Ex: C: */
-	/* readlink() fails if the reparse point does not target a valid pathname */
-	if (n < 0) goto this_is_not_a_symlink; /* This is not a junction. */
-	bIsJunction = TRUE; /* Else this is a junction. Fall through to the symlink case. */
-	}
-      case IO_REPARSE_TAG_SYMLINK:		/* NTFS symbolic link */
-      case IO_REPARSE_TAG_APPEXECLINK:		/* Application Execution link */
-	pStat->st_mode |= S_IFLNK;		/* Symbolic link */
-	break;
-      default:	/* Anything else is definitely not like a Unix symlink */
-this_is_not_a_symlink:
-	dwAttr &= ~FILE_ATTRIBUTE_REPARSE_POINT;
-	goto check_attr_again;
-    }
-  } else if (dwAttr & FILE_ATTRIBUTE_DIRECTORY)
-    pStat->st_mode |= S_IFDIR;		/* Subdirectory */
-  else if (dwAttr & FILE_ATTRIBUTE_DEVICE)
-    pStat->st_mode |= S_IFCHR;		/* Device (we don't know if character or block) */
-  else
-    pStat->st_mode |= S_IFREG;		/* A normal file by default */
-  /* pStat->st_mode |= (pDirent->d_type << 12); /* Set the 4-bit type field */
+  wType = MlxAttrAndTag2Type(pwszName, NULL, dwAttr, dwTag);
+  pStat->st_mode |= wType << 12; /* Set the 4-bit type field */
+  /* File mode bits */
   pStat->st_mode |= _S_IREAD | _S_IWRITE | _S_IEXEC; /* Assume it's fully accessible */
   if (dwAttr & FILE_ATTRIBUTE_READONLY) pStat->st_mode &= ~_S_IWRITE;
+  /* TO DO: Correct the read & exec mode bits */
   /* DOS-specific attributes */
   if (dwAttr & FILE_ATTRIBUTE_HIDDEN) pStat->st_mode |= S_HIDDEN;
   if (dwAttr & FILE_ATTRIBUTE_ARCHIVE) pStat->st_mode |= S_ARCHIVE;
@@ -238,7 +232,9 @@ this_is_not_a_symlink:
   if (dwAttr & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED) pStat->st_mode |= S_NOT_CONTENT_INDEXED;
   if (dwAttr & FILE_ATTRIBUTE_OFFLINE) pStat->st_mode |= S_OFFLINE;
   if (dwAttr & FILE_ATTRIBUTE_SPARSE_FILE) pStat->st_mode |= S_SPARSE_FILE;
-  if (bIsMountPoint) pStat->st_mode |= S_MOUNT_POINT; /* Will allow to distinguish junctions from mount points */
+  if ((dwTag & IO_REPARSE_TAG_TYPE_BITS) == IO_REPARSE_TAG_MOUNT_POINT) {
+    pStat->st_mode |= S_MOUNT_POINT; /* Will allow to distinguish junctions from symlinkds and mount points */
+  }
   /* if (dwAttr & FILE_ATTRIBUTE_TEMPORARY) pStat->st_mode |= S_TEMPORARY; */
   /* if (dwAttr & FILE_ATTRIBUTE_VIRTUAL) pStat->st_mode |= S_VIRTUAL; */
 #if _MSVCLIBX_STAT_DEFINED
@@ -246,8 +242,35 @@ this_is_not_a_symlink:
   pStat->st_ReparseTag = dwTag;
 #endif
 
+  /* Finally set st_dev & st_ino fields from the volume and file IDs */
+  pStat->st_dev = *(dev_t *)(&fid.dwIDVol0);
+  pStat->st_ino = *(ino_t *)(&fid.dwIDFil0);
+  if (*(ino_t *)(&fid.dwIDFil2)) *(ino_t *)(&fid.dwIDFil0) = 0; /* This is an ReFS ID that does not fit on 64 bits */
+
   free(pwszName);
-  RETURN_INT_COMMENT(0, ("%s  mode = 0x%04X  size = %I64d bytes\n", szTime, pStat->st_mode, qwSize));
+
+  DEBUG_CODE({
+    extern char *szLibcFileTypes[16];
+    strcpy(szAttrs, szLibcFileTypes[pStat->st_mode >> 12]);
+    if (pStat->st_mode & S_MOUNT_POINT) strcat(szAttrs, " MOUNT_POINT");
+    if (pStat->st_mode & _S_IREAD) strcat(szAttrs, " READ");
+    if (pStat->st_mode & _S_IWRITE) strcat(szAttrs, " WRITE");
+    if (pStat->st_mode & _S_IEXEC) strcat(szAttrs, " EXEC");
+    if (pStat->st_mode & S_HIDDEN) strcat(szAttrs, " HIDDEN");
+    if (pStat->st_mode & S_ARCHIVE) strcat(szAttrs, " ARCHIVE");
+    if (pStat->st_mode & S_SYSTEM) strcat(szAttrs, " SYSTEM");
+    if (pStat->st_mode & S_COMPRESSED) strcat(szAttrs, " COMPRESSED");
+    if (pStat->st_mode & S_ENCRYPTED) strcat(szAttrs, " ENCRYPTED");
+    if (pStat->st_mode & S_NOT_CONTENT_INDEXED) strcat(szAttrs, " NOT_INDEXED");
+    if (pStat->st_mode & S_OFFLINE) strcat(szAttrs, " OFFLINE");
+    if (pStat->st_mode & S_SPARSE_FILE) strcat(szAttrs, " SPARSE");
+  })
+
+  RETURN_INT_COMMENT(0, ("%s  mode = 0x%04X = {%s}  size = %I64d bytes\n", szTime, pStat->st_mode, szAttrs, qwSize));
+}
+
+int lstat(const char *path, struct stat *pStat) {
+  return lstatX(path, pStat, TRUE);
 }
 
 /*---------------------------------------------------------------------------*\
@@ -270,33 +293,14 @@ this_is_not_a_symlink:
 |    2017-03-22 JFL No need to fully resolve all links in the pathname.       |
 |		    Resolving the tail links is sufficient, and much faster.  |
 |    2017-03-24 JFL Only resolve links if it's a link.                        |
+|    2023-11-23 JFL In debug mode, don't print errno if there's no error.     |
+|    2026-02-10 JFL Set the st_dev and st_ino fields too.		      |
 *									      *
 \*---------------------------------------------------------------------------*/
 
 #if !USE_MSVC_STAT
 int stat(const char *path, struct stat *pStat) {
-  char buf[UTF8_PATH_MAX];
-  int iErr;
-  DWORD dwAttr;
-
-  DEBUG_ENTER((STRINGIZE(stat) "(\"%s\", 0x%p);\n", path, pStat));
-
-  dwAttr = GetFileAttributes(path);
-  if (dwAttr == INVALID_FILE_ATTRIBUTES) {
-    errno = ENOENT;
-    RETURN_INT_COMMENT(-1, ("File does not exist\n"));
-  }
-
-  if (dwAttr & FILE_ATTRIBUTE_REPARSE_POINT) {
-    iErr = ResolveTailLinks(path, buf, sizeof(buf));
-    path = buf;
-  } else {
-    iErr = 0;
-  }
-
-  if (!iErr) iErr = lstat(path, pStat);
-
-  RETURN_INT(iErr);
+  return lstatX(path, pStat, FALSE);
 }
 #endif /* !USE_MSVC_STAT */
 
@@ -342,9 +346,11 @@ int dirent2stat(const _dirent *pDirent, struct stat *pStat) {
   pStat->st_Win32Attrs = pDirent->d_attribs;
   pStat->st_ReparseTag = pDirent->d_ReparseTag;
 #endif
+  /* Unique IDs */
+  pStat->st_ino = pDirent->d_ino; /* Always 0 in MsvcLibX' struct dirent */
+  pStat->st_dev = 0;		  /* No corresponding field in "" dirent */
 
   return 0;
 }
 
 #endif /* _WIN32 */
-

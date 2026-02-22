@@ -26,6 +26,7 @@
 *    2017-10-02 JFL Removed struct _dirhandle dependency on MAX_PATH.	      *
 *		    Renamed it as struct _DIR.				      *
 *    2018-04-24 JFL Use PATH_MAX and NAME_MAX from limits.h.		      *
+*    2021-11-10 JFL Added routines dirfd() and FD2dir().    		      *
 *		    							      *
 *         © Copyright 2016 Hewlett Packard Enterprise Development LP          *
 * Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 *
@@ -44,10 +45,6 @@
 #include <stdio.h>
 #include <errno.h>
 #include <limits.h>	/* Defines PATH_MAX and NAME_MAX */
-
-#ifndef ENAMETOOLONG /* Not defined in DOS' errno.h */
-#define ENAMETOOLONG 38
-#endif
 
 #ifdef  __cplusplus
 extern "C" {
@@ -79,7 +76,7 @@ typedef struct _fileinfo fileinfo;
 #pragma pack(1)
 struct dirent { /* Standard C library structure returning directory entries. */
   /* Standard fields */
-  _ino_t d_ino;		/* We don't need it, but it's required by the spec */
+  ino_t d_ino;		/* We don't need it, but it's required by the spec */
   unsigned char d_type;	/* File type. Values defined in macros DT_xxxx */
   /* unsigned char d_namlen; /* File name length, not including NUL */
   /* OS-specific extensions (allowed by the Posix specification) */
@@ -151,7 +148,7 @@ struct dirent { /* Structure used to return information about directory entries.
   uint64_t d_filesize;
   char     d_shortname[14*sizeof(WCHAR)];
   /* Standard fields */
-  _ino_t d_ino;		/* We don't need it, but it's required by the spec */
+  ino_t d_ino;		/* We don't need it, but it's required by the spec */
   unsigned char d_type;	/* File type. Values defined in macros DT_xxxx */
   /* unsigned char d_namlen; /* File name length, not including NUL */
   char d_name[(NAME_MAX+1)*sizeof(WCHAR)]; /* Null-terminated file name */
@@ -181,7 +178,7 @@ struct _DIR { /* Private structure, not for use by users */
 #include "os2.h"
 
 struct dirent { /* Structure used to return information about directory entries. */
-  _ino_t d_ino;		/* We don't need it, but it's required by the spec */
+  ino_t d_ino;		/* We don't need it, but it's required by the spec */
   /* Non standard extensions, to ease adapting old DOS/WIN32 apps */
   uintmax_t d_filesize;	/* File size */
   uint16_t time;	/* MS-DOS time */
@@ -256,7 +253,8 @@ extern _dirent *readdirM(DIR *pDir, UINT cp);	    /* Read a directory entry. Ret
 /* extern void rewinddir(DIR *pDir); /* Rewind DIRP to the beginning of the directory. */
 /* extern void seekdir(DIR *pDir, long lPos); /* Seek to position POS on DIRP. */
 /* extern long telldir(DIR *pDir); /* Return the current position of DIRP. */
-/* extern int dirfd(DIR *pDir); /* Return the file descriptor used by DIRP. */
+extern int dirfd(DIR *pDir); /* Return the file descriptor used by DIRP. */
+extern DIR *FD2dir(int iFD); /* MsvcLibX-specific routine for doing the inverse conversion */
 
 /* Scan the directory dir, calling cbSelect() on each directory entry.
    Entries for which cbSelect() returns nonzero are individually malloc'd,

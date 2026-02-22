@@ -42,10 +42,13 @@
 #		    generic targets is used, then the default Files.mak is    #
 #		    used instead. Same definitions.			      #
 #									      #
-#		    Note that these sub-make files are designed to be	      #
+#		    Note that the Files.mak sub-make files are designed to be #
 #		    OS-independant. The goal is to reuse them to build	      #
-#		    the same program under Unix/Linux too. So for example,    #
-#		    all paths must contain forward slashes.		      #
+#		    the same programs under Unix/Linux too. So for example,   #
+#		    all paths must contain forward slashes. And they cannot   #
+#		    contain conditional directives.			      #
+#		    The {prog}.mak sub-make files are for Microsoft nmake     #
+#		    consumption only, and do not have these limitations.      #
 #									      #
 #		    Another design goal is to use that same win32.mak	      #
 #		    in complex 1-project environments (One Files.mak defines  #
@@ -132,13 +135,34 @@
 #    2019-03-18 JFL Fixed the DOS stub location, based on OUTDIR.	      #
 #    2019-11-03 JFL Removed /Zp from CFLAGS as this breaks new SDK 10 builds. #
 #    2019-11-13 JFL Added CXXFlags for C++ compilation: Fixes builds w. Boost.#
+#    2022-12-09 JFL Fixed macros redefinitions when recursively calling nmake.#
+#    2022-12-13 JFL Ported the latest changes between DOS.mak and WIN32.mak.  #
+#    2022-12-18 JFL Display each build using a phony EXT.hl target, instead   #
+#		    of a $(HEADLINE) command in every inference rule.	      #
+#		    Store converted sources in SRC\$(CODEPAGE) to share them  #
+#		    between all builds using the same code page.	      #
+#    2022-12-22 JFL `make clean` now deletes libraries in $(LIBDIR).          #
+#    2023-01-18 JFL Introduce a dummy config.h, for compatibility with the    #
+#		    DOS and Unix builds that do need it.		      #
+#    2023-11-18 JFL Added .cc and .cxx to the .SUFFIXES list.		      #
+#		    Avoid warning "too many rules for target '...\....dll'".  #
+#    2023-11-28 JFL Define _DLL for nmake & cl when building a DLL. This      #
+#		    allows having DLLs with the same base name as the exe.    #
+#		    And possibly to build both from the same source file.     #
+#    2023-11-29 JFL Set the SUBSYSTEM version in all linking rules.           #
+#    2024-01-01 JFL Display the message "Updating localized C sources" only   #
+#		    if some sources changed.				      #
+#    2024-01-08 JFL Fixed bugs in the $(CONV_SOURCES) batch script.           #
+#    2024-10-14 JFL Consistent generation of DOS & WIN32 config.h files.      #
+#    2024-10-19 JFL Fixed a bug in RemBOM.bat which caused a hang in W7VM.    #
+#    2025-09-26 JFL The batch config file name is config.$(CONFNAME).bat.     #
 #		    							      #
 #      © Copyright 2016-2018 Hewlett Packard Enterprise Development LP        #
 # Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 #
 ###############################################################################
 
 .SUFFIXES: # Clear the predefined suffixes list.
-.SUFFIXES: .exe .obj .asm .c .r .cpp .res .rc .def .manifest .mak .bsc .sbr
+.SUFFIXES: .exe .obj .asm .c .r .cpp .cc .cxx .res .rc .def .manifest .mak .bsc .sbr .hl
 
 ###############################################################################
 #									      #
@@ -149,22 +173,53 @@
 !IF !DEFINED(T)
 T=WIN32				# Target OS
 !ENDIF
+
+!IF !DEFINED(T_VARS)
+T_VARS=1	# Make sure OS-type-specific variables are defined only once
+
+CC=$(WIN32_CC)
+AS=$(WIN32_AS)
+LK=$(WIN32_LK)
+LB=$(WIN32_LB)
+RC=$(WIN32_RC)
+MT=$(WIN32_MT)
+
+PATH=$(WIN32_PATH)
+INCPATH=$(WIN32_INCPATH)
+MSVCINCLUDE=$(WIN32_VCINC:\=/) # Path of MSVC compiler include files, without quotes, and with forward slashes
+UCRTINCLUDE=$(WIN32_CRTINC:\=/) # Path of MSVC CRT library include files, without quotes, and with forward slashes
+WSDKINCLUDE=$(WIN32_WINSDKINC:\=/) # Path of Windows SDK include files, without quotes, and with forward slashes
+LIB=$(WIN32_LIBPATH)
+
+MACHINE=X86			# Target CPU = Intel 32-bits X86
+USEDOSSTUB=1			# Use an MS-DOS stub
+
+# Library SuffiX. For storing multiple versions of the same library in a single directory.
+LSX=w32
+
+!ENDIF # !DEFINED(T_VARS)
+
+###############################################################################
+#									      #
+#		      End of OS-type-specific definitions		      #
+#									      #
+###############################################################################
+
+###############################################################################
+#									      #
+#		General definitions, based on the specific ones		      #
+#									      #
+###############################################################################
+
 !IF DEFINED(MESSAGES)
 !MESSAGE Started $(T).mak in $(MAKEDIR) # Display this file name, or the caller's name
 !ENDIF
 
-# Command-line definitions that need carrying through to sub-make instances
-# Note: Cannot redefine MAKEFLAGS, so defining an alternate variable instead.
-MAKEDEFS=
-!IF DEFINED(WINVER) # Windows target version. 4.0=Win95/NT4 5.1=XP 6.0=Vista ...
-MAKEDEFS=$(MAKEDEFS) "WINVER=$(WINVER)"
-!ENDIF
-
 THIS_MAKEFILE=win32.mak		# This very make file name
 MAKEFILE=$(T).mak		# The OS-specific make file name
-!IF (!EXIST("$(MAKEFILE)")) && EXIST("$(STINCLUDE)\$(MAKEFILE)")
-MAKEFILE=$(STINCLUDE)\$(MAKEFILE)
-THIS_MAKEFILE=$(STINCLUDE)\$(THIS_MAKEFILE)
+!IF (!EXIST("$(MAKEFILE)")) && EXIST("$(NMINCLUDE)\$(MAKEFILE)")
+MAKEFILE=$(NMINCLUDE)\$(MAKEFILE)
+THIS_MAKEFILE=$(NMINCLUDE)\$(THIS_MAKEFILE)
 !ENDIF
 
 # Debug-mode-specific definitions
@@ -186,15 +241,21 @@ DS=
 S=.				# Where to find source files
 !IF !DEFINED(OUTDIR)
 OUTDIR=bin
-R=$(OUTDIR)\$(T)		# Root output path - In the default bin subdirectory
-!ELSEIF "$(OUTDIR)"=="."
+!ENDIF
+!IF "$(OUTDIR)"=="."
 R=$(T)				# Root output path - In the current directory
-!ELSE # It's defined and not empty
+S2=SRC\utf8			# Copy of the C sources, with the UTF-8 BOM removed
+!ELSE
 R=$(OUTDIR)\$(T)		# Root output path - In the specified directory
+S2=$(OUTDIR)\SRC\utf8		# Copy of the C sources, with the UTF-8 BOM removed
 !ENDIF
 B=$(R)$(DS)			# Where to store binary executable files
 O=$(B)\OBJ			# Where to store object files
 L=$(B)\LIST			# Where to store listing files
+I=$(B)\INC			# Where to store include files generated by this make file
+X=$(R)\Scripts			# Where to store scripts generated by this make file
+M=$(R)\Make			# Where to store temp make files generated by this make file
+P=$(R)\Temp			# Where to store temp files generated by this make file
 
 RP=$(R)\			# Idem, with the OS-specific path separator
 SP=$(S)\			#
@@ -202,7 +263,7 @@ OP=$(O)\			#
 BP=$(B)\			#
 LP=$(L)\			#
 
-BR=$(T)$(DS)			# Idem, relative to sources
+BR=$(T)$(DS)			# Idem B, relative to OUTDIR. Used by configure.bat.
 
 !IFNDEF TMP
 !IFDEF TEMP
@@ -213,26 +274,10 @@ TMP=.
 !ENDIF
 
 !IF !DEFINED(DISPATCH_OS)
-!IF !DEFINED(T_VARS)
-T_VARS=1	# Make sure OS-type-specific variables are defined only once
-# Tools and options
-CC=$(WIN32_CC)
-AS=$(WIN32_AS)
-LK=$(WIN32_LK)
-LB=$(WIN32_LB)
-RC=$(WIN32_RC)
-MT=$(WIN32_MT)
 
-PATH=$(WIN32_PATH)
-INCPATH=$(WIN32_INCPATH)
-MSVCINCLUDE=$(WIN32_VCINC:\=/) # Path of MSVC compiler include files, without quotes, and with forward slashes
-UCRTINCLUDE=$(WIN32_CRTINC:\=/) # Path of MSVC CRT library include files, without quotes, and with forward slashes
-WSDKINCLUDE=$(WIN32_WINSDKINC:\=/) # Path of Windows SDK include files, without quotes, and with forward slashes
-LIB=$(WIN32_LIBPATH)
-
-MACHINE=X86			# Target CPU = Intel 32-bits X86
-USEDOSSTUB=1			# Use an MS-DOS stub
-!ENDIF # !DEFINED(T_VARS)
+!IF DEFINED(_DLL)
+DD=$(DD) /D_DLL			# Tell sources when they're built for a DLL
+!ENDIF
 
 # Tools and options
 !IF !DEFINED(AFLAGS)
@@ -307,19 +352,24 @@ RFLAGS=$(RFLAGS) "/DWITH_DOS_STUB"
 !ENDIF
 
 !IF !DEFINED(SUBSYSTEM)
-!IF DEFINED(WINVER) && ("$(WINVER)" != "")
-SUBSYSTEM=CONSOLE,$(WINVER:.=.0) # Link.exe SUBSYSTEM version format is M.mm, with M the major version, and mm the minor version
-!ELSE
 SUBSYSTEM=CONSOLE
 !ENDIF
+# Append the SUBSYSTEM version, if not present already
+!IF DEFINED(WINVER) && ("$(SUBSYSTEM:,=)" == "$(SUBSYSTEM)")
+SUBSYSTEM=$(SUBSYSTEM),$(WINVER:.=.0) # Link.exe SUBSYSTEM version format is M.mm, with M the major version, and mm the minor version
 !ENDIF
 
-INCLUDE=$(S);$(O);$(STINCLUDE);$(INCPATH);$(USER_INCLUDE)
+INCLUDE=$(S2);$(S);$(O);$(NMINCLUDE);$(INCPATH);$(USER_INCLUDE)
 LIBS=$(LIBS) $(USER_LIBS)
 
 # Forward library detections by configure.bat to the C compiler and assembler
 CFLAGS=$(CFLAGS) $(HAS_SDK_FLAGS)
 AFLAGS=$(AFLAGS) $(HAS_SDK_FLAGS)
+# Even though the Windows versions don't need it, unlike the DOS or Unix versions,
+# for the C sources that _do_ include <config.h>, provide access to a dummy one.
+CFLAGS=$(CFLAGS) /I$(I)		# Make sure the compiler finds the config.h file we generate
+CONFIG_H=$(I)\config.h		# Contains system-specific constants definitions 
+CONFIG_I=$(I)\config.i		# Contains #include <config.h>
 
 # Forward user information from configure.bat to the C and RC compilers
 !IF DEFINED(MY_FULLNAME)
@@ -333,25 +383,28 @@ RFLAGS=$(RFLAGS) "/DMY_EMAIL=$(MY_EMAIL)"
 AFLAGS=$(AFLAGS) "/DMY_EMAIL=$(MY_EMAIL)"
 !ENDIF
 !IF DEFINED(PROGRAM)
-CFLAGS=$(CFLAGS) "/DPROGRAM_VER_H=$(PROGRAM).ver.h"
 RFLAGS=$(RFLAGS) "/DPROGRAM_VER_H=$(PROGRAM).ver.h"
-AFLAGS=$(AFLAGS) "/DPROGRAM_VER_H=$(PROGRAM).ver.h"
 !ENDIF
 
 CXXFLAGS=/EHsc $(CFLAGS)
 
 # Files and scripts used for compilation
-UTF8_BOM_FILE=$(O)\UTF8_BOM	# A file containing the UTF-8 Byte-Order Mark
-REMOVE_UTF8_BOM=$(O)\RemBOM.bat	# Script for conditionally removing the UTF-8 BOM
-CONV_SCRIPT=$(O)\MiniConv.bat	# Script emulating what conv.exe would do for us
+UTF8_BOM_FILE=$(X)\UTF8_BOM	# A file containing the UTF-8 Byte-Order Mark
+REMOVE_UTF8_BOM=$(X)\RemBOM.bat	# Script for conditionally removing the UTF-8 BOM
+CONV_SCRIPT=$(X)\MiniConv.bat	# Script emulating what conv.exe would do for us
+CONV_SOURCES=$(X)\ConvSRCs.bat	# Script converting all sources at once
+CONVERT_STAMP=$(S2)\LastConv.txt # Timestamps when the last conversion was done
 !IF !DEFINED(CONV)
 CONV=$(COMSPEC) /c $(CONV_SCRIPT)
 !ENDIF
 
-# Library SuffiX. For storing multiple versions of the same library in a single directory.
-!IF !DEFINED(LSX)
-LSX=w32
+!IF !DEFINED(CONFNAME)
+CONFNAME=$(COMPUTERNAME)	# The batch config file name is config.$(CONFNAME).bat
 !ENDIF
+
+# Library SuffiX. For storing multiple versions of the same library in a single directory.
+VALUEIZE=LSX0=$(LSX)
+!INCLUDE valueize.mak
 !IF $(DEBUG)
 LSX=$(LSX)d
 !ENDIF
@@ -371,6 +424,7 @@ LSX=$(LSX)d
 MSG=>con echo		# Command for writing a progress message on the console
 HEADLINE=$(MSG).&$(MSG)	# Output a blank line, then a message
 REPORT_FAILURE=$(MSG) ... FAILED. & exit /b # Report that a build failed, and forward the error code.
+WARN=>con <nul set /p "=Warn" & $(MSG) ing: # Output a warning, without having the word Warning in the log file when using make /P.	
 
 # Add the /NOLOGO flags to MAKEFLAGS. But problem: MAKEFLAGS cannot be updated
 MAKEFLAGS_=/$(MAKEFLAGS)# Also MAKEFLAGS does not contain the initial /
@@ -382,7 +436,20 @@ MAKEFLAGS__=/_ /$(MAKEFLAGS) /_	# Temp variable to check if /NOLOGO is already t
 MAKEFLAGS_=/NOLOGO $(MAKEFLAGS_)
 !ENDIF
 !UNDEF MAKEFLAGS__
-SUBMAKE=$(MAKE) $(MAKEFLAGS_) /F "$(MAKEFILE)" $(MAKEDEFS) # Recursive call to this make file
+
+# Command-line definitions that need carrying through to sub-make instances
+# Note: Cannot redefine MAKEFLAGS, so defining an alternate variable instead.
+MAKEDEFS="DEBUG=$(DEBUG)"
+!IF DEFINED(WINVER) # Windows target version. 4.0=Win95/NT4 5.1=XP 6.0=Vista ...
+MAKEDEFS="WINVER=$(WINVER)" $(MAKEDEFS)
+!ENDIF
+!IF DEFINED(_DLL) # Marker to tell CC we're compiling a DLL
+MAKEDEFS="_DLL=" $(MAKEDEFS)
+!ENDIF
+
+# Do not include $(MAKEDEFS) in SUBMAKE definition, as macros can only be
+# overriden by inserting a new value _ahead_ of the previous definitions.
+SUBMAKE=$(MAKE) $(MAKEFLAGS_) /F "$(MAKEFILE)" # Recursive call to this make file
 
 ###############################################################################
 #									      #
@@ -391,197 +458,192 @@ SUBMAKE=$(MAKE) $(MAKEFLAGS_) /F "$(MAKEFILE)" $(MAKEDEFS) # Recursive call to t
 ###############################################################################
 
 # Inference rules to generate the required PROGRAM variable
+
+# There are two levels of inference rules, that call each other recursively:
+# - Level 1 (top) generate the PROGRAM base name, and the list of files to build
+# - Level 2 (low) load $(PROGRAM).mak, and does the build
+
 !IF !DEFINED(PROGRAM)
 
+# Top level inference rules, specifying a phony target in the current directory.
+# The debug mode must be specified by the user in the DEBUG macro. Default: DEBUG=0
+# Each rule defines the actual targets to build in OS-specific subdirectories.
+
 !IF !DEFINED(DISPATCH_OS)
-# Inference rules generating the output path, using the predefined debug mode.
+
 .cpp.obj:
-    @echo Applying $(T).mak inference rule .cpp.obj:
-    $(HEADLINE) Building $(@F) $(T) $(DM) version
-    $(SUBMAKE) "DEBUG=$(DEBUG)" "PROGRAM=$(*F)" dirs $(O)\$(*F).obj
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) .cpp.obj:
+    $(SUBMAKE) "PROGRAM=$(*F)" $(MAKEDEFS) obj.hl dirs $(O)\$(@F)
 
 .c.obj:
-    @echo Applying $(T).mak inference rule .c.obj:
-    $(HEADLINE) Building $(@F) $(T) $(DM) version
-    $(SUBMAKE) "DEBUG=$(DEBUG)" "PROGRAM=$(*F)" dirs $(O)\$(*F).obj
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) .c.obj:
+    $(SUBMAKE) "PROGRAM=$(*F)" $(MAKEDEFS) obj.hl dirs $(O)\$(@F)
 
 .asm.obj:
-    @echo Applying $(T).mak inference rule .asm.obj:
-    $(HEADLINE) Building $(@F) $(T) $(DM) version
-    $(SUBMAKE) "DEBUG=$(DEBUG)" "PROGRAM=$(*F)" dirs $(O)\$(*F).obj
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) .asm.obj:
+    $(SUBMAKE) "PROGRAM=$(*F)" $(MAKEDEFS) obj.hl dirs $(O)\$(@F)
 
 .rc.res:
-    @echo Applying $(T).mak inference rule .rc.res:
-    $(HEADLINE) Building $(@F) $(T) $(DM) version
-    $(SUBMAKE) "DEBUG=$(DEBUG)" "PROGRAM=$(*F)" dirs $(O)\$(*F).res
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) .rc.res:
+    $(SUBMAKE) "PROGRAM=$(*F)" $(MAKEDEFS) res.hl dirs $(O)\$(@F)
 
 .cpp.exe:
-    @echo Applying $(T).mak inference rule .cpp.exe:
-    $(HEADLINE) Building $(@F) $(T) $(DM) version
-    $(SUBMAKE) "DEBUG=$(DEBUG)" "PROGRAM=$(*F)" dirs $(O)\$(*F).obj $(B)\$(*F).exe
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) .cpp.exe:
+    $(SUBMAKE) "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $(O)\$(*F).obj $(B)\$(*F).exe
 
 .c.exe:
-    @echo Applying $(T).mak inference rule .c.exe:
-    $(HEADLINE) Building $(@F) $(T) $(DM) version
-    $(SUBMAKE) "DEBUG=$(DEBUG)" "PROGRAM=$(*F)" dirs $(O)\$(*F).obj $(B)\$(*F).exe
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) .c.exe:
+    $(SUBMAKE) "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $(O)\$(*F).obj $(B)\$(*F).exe
 
 .asm.exe:
-    @echo Applying $(T).mak inference rule .asm.exe:
-    $(HEADLINE) Building $(@F) $(T) $(DM) version
-    $(SUBMAKE) "DEBUG=$(DEBUG)" "PROGRAM=$(*F)" dirs $(O)\$(*F).obj $(B)\$(*F).exe
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) .asm.exe:
+    $(SUBMAKE) "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $(O)\$(*F).obj $(B)\$(*F).exe
 
 .mak.exe:
-    @echo Applying $(T).mak inference rule .mak.exe:
-    $(HEADLINE) Building $(@F) $(T) $(DM) version
-    $(SUBMAKE) "DEBUG=$(DEBUG)" "PROGRAM=$(*F)" dirs $(B)\$(*F).exe
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) .mak.exe:
+    $(SUBMAKE) "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $(B)\$(*F).exe
 
 .mak.lib:
-    @echo Applying $(T).mak inference rule .mak.lib:
-    $(HEADLINE) Building $(@F) $(T) $(DM) version
-    $(SUBMAKE) "DEBUG=$(DEBUG)" "PROGRAM=$(*F)" dirs $(B)\$(*F).lib
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) .mak.lib:
+    $(SUBMAKE) "PROGRAM=$(*F)" "_DLL=" $(MAKEDEFS) lib.hl dirs $(B)\$(@F)
 
 .mak.dll:
-    @echo Applying $(T).mak inference rule .mak.dll:
-    $(HEADLINE) Building $(@F) $(T) $(DM) version
-    $(SUBMAKE) "DEBUG=$(DEBUG)" "PROGRAM=$(*F)" dirs $(B)\$(*F).dll
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) .mak.dll:
+    $(SUBMAKE) "PROGRAM=$(*F)" "_DLL=" $(MAKEDEFS) dll.hl dirs $(B)\$(@F)
 !ENDIF # !DEFINED(DISPATCH_OS)
+
+# Top level inference rules, specifying actual targets in subdirectories.
+# The subdirectory name defines the debug mode.
+# Each rule defines the actual targets to build in OS-specific subdirectories.
 
 # Inference rules to compile a C++ program, inferring the debug mode from the output path specified.
 # (Define C++ inferences rules before C inferences rules, so that if both a .c and .cpp file are present, the .cpp is used preferably.)
-{$(S)\}.cpp{$(R)\obj\}.obj:
-    @echo Applying $(T).mak inference rule {$$(S)\}.cpp{$$(R)\obj\}.obj:
-    $(MSG) Compiling the $(T) release version
-    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.cpp{$(R)\OBJ\}.obj:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.cpp{$$(R)\OBJ\}.obj:
+    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" $(MAKEDEFS) obj.hl dirs $@
 
-{$(S)\}.cpp{$(R)\DEBUG\obj\}.obj:
-    @echo Applying $(T).mak inference rule {$$(S)\}.cpp{$$(R)\DEBUG\obj\}.obj:
-    $(MSG) Compiling the $(T) debug version
-    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.cpp{$(R)\Debug\OBJ\}.obj:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.cpp{$$(R)\Debug\OBJ\}.obj:
+    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" $(MAKEDEFS) obj.hl dirs $@
 
 # Inference rules to compile a C program, inferring the debug mode from the output path specified.
-{$(S)\}.c{$(R)\obj\}.obj:
-    @echo Applying $(T).mak inference rule {$$(S)\}.c{$$(R)\obj\}.obj:
-    $(MSG) Compiling the $(T) release version
-    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.c{$(R)\OBJ\}.obj:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.c{$$(R)\OBJ\}.obj:
+    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" $(MAKEDEFS) obj.hl dirs $@
 
-{$(S)\}.c{$(R)\DEBUG\obj\}.obj:
-    @echo Applying $(T).mak inference rule {$$(S)\}.c{$$(R)\DEBUG\obj\}.obj:
-    $(MSG) Compiling the $(T) debug version
-    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.c{$(R)\Debug\OBJ\}.obj:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.c{$$(R)\Debug\OBJ\}.obj:
+    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" $(MAKEDEFS) obj.hl dirs $@
 
 # Inference rules to assemble an assembler program, inferring the debug mode from the output path specified.
-{$(S)\}.asm{$(R)\obj\}.obj:
-    @echo Applying $(T).mak inference rule {$$(S)\}.asm{$$(R)\obj\}.obj:
-    $(MSG) Assembling the $(T) release version
-    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.asm{$(R)\OBJ\}.obj:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.asm{$$(R)\OBJ\}.obj:
+    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" $(MAKEDEFS) obj.hl dirs $@
 
-{$(S)\}.asm{$(R)\DEBUG\obj\}.obj:
-    @echo Applying $(T).mak inference rule {$$(S)\}.asm{$$(R)\DEBUG\obj\}.obj:
-    $(MSG) Assembling the $(T) debug version
-    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.asm{$(R)\Debug\OBJ\}.obj:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.asm{$$(R)\Debug\OBJ\}.obj:
+    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" $(MAKEDEFS) obj.hl dirs $@
 
 # Inference rules to compile a Windows resource file, inferring the debug mode from the output path specified.
-{$(S)\}.rc{$(R)\obj\}.res:
-    @echo Applying $(T).mak inference rule {$$(S)\}.rc{$$(R)\obj\}.res:
-    $(MSG) Compiling the $(T) release version
-    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.rc{$(R)\OBJ\}.res:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.rc{$$(R)\OBJ\}.res:
+    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" $(MAKEDEFS) res.hl dirs $@
 
-{$(S)\}.rc{$(R)\DEBUG\obj\}.res:
-    @echo Applying $(T).mak inference rule {$$(S)\}.rc{$$(R)\DEBUG\obj\}.res:
-    $(MSG) Compiling the $(T) debug version
-    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.rc{$(R)\Debug\OBJ\}.res:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.rc{$$(R)\Debug\OBJ\}.res:
+    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" $(MAKEDEFS) res.hl dirs $@
 
 # Inference rules to build a C++ program, inferring the debug mode from the output path specified.
 # (Define C++ inferences rules before C inferences rules, so that if both a .c and .cpp file are present, the .cpp is used preferably.)
 {$(S)\}.cpp{$(R)\}.exe:
-    @echo Applying $(T).mak inference rule {$$(S)\}.cpp{$$(R)\}.exe:
-    $(HEADLINE) Building $(@F) $(T) release version
-    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" dirs $(R)\OBJ\$(*F).obj $(R)\$(*F).exe
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.cpp{$$(R)\}.exe:
+    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $(R)\OBJ\$(*F).obj $@
 
-{$(S)\}.cpp{$(R)\DEBUG\}.exe:
-    @echo Applying $(T).mak inference rule {$$(S)\}.cpp{$$(R)\DEBUG\}.exe:
-    $(HEADLINE) Building $(@F) $(T) debug version
-    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" dirs $(R)\DEBUG\OBJ\$(*F).obj $(R)\DEBUG\$(*F).exe
+{$(S)\}.cpp{$(R)\Debug\}.exe:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.cpp{$$(R)\Debug\}.exe:
+    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $(R)\DEBUG\OBJ\$(*F).obj $@
 
 # Inference rules to build a C program, inferring the debug mode from the output path specified.
 {$(S)\}.c{$(R)\}.exe:
-    @echo Applying $(T).mak inference rule {$$(S)\}.c{$$(R)\}.exe:
-    $(HEADLINE) Building $(@F) $(T) release version
-    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" dirs $(R)\OBJ\$(*F).obj $(R)\$(*F).exe
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.c{$$(R)\}.exe:
+    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $(R)\OBJ\$(*F).obj $@
 
-{$(S)\}.c{$(R)\DEBUG\}.exe:
-    @echo Applying $(T).mak inference rule {$$(S)\}.c{$$(R)\DEBUG\}.exe:
-    $(HEADLINE) Building $(@F) $(T) debug version
-    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" dirs $(R)\DEBUG\OBJ\$(*F).obj $(R)\DEBUG\$(*F).exe
+{$(S)\}.c{$(R)\Debug\}.exe:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.c{$$(R)\Debug\}.exe:
+    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $(R)\DEBUG\OBJ\$(*F).obj $@
 
 # Inference rules to build an assembler program, inferring the debug mode from the output path specified.
 {$(S)\}.asm{$(R)\}.exe:
-    @echo Applying $(T).mak inference rule {$$(S)\}.asm{$$(R)\}.exe:
-    $(HEADLINE) Building $(@F) $(T) release version
-    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" dirs $(R)\OBJ\$(*F).obj $(R)\$(*F).exe
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.asm{$$(R)\}.exe:
+    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $(R)\OBJ\$(*F).obj $@
 
-{$(S)\}.asm{$(R)\DEBUG\}.exe:
-    @echo Applying $(T).mak inference rule {$$(S)\}.asm{$$(R)\DEBUG\}.exe:
-    $(HEADLINE) Building $(@F) $(T) debug version
-    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" dirs $(R)\DEBUG\OBJ\$(*F).obj $(R)\DEBUG\$(*F).exe
+{$(S)\}.asm{$(R)\Debug\}.exe:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.asm{$$(R)\Debug\}.exe:
+    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $(R)\DEBUG\OBJ\$(*F).obj $@
 
 # Inference rules to build a makefile-defined program, inferring the debug mode from the output path specified.
 {$(S)\}.mak{$(R)\}.exe:
-    @echo Applying $(T).mak inference rule {$$(S)\}.mak{$$(R)\}.exe:
-    $(HEADLINE) Building $(@F) $(T) release version
-    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" dirs $@
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.mak{$$(R)\}.exe:
+    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $@
 
-{$(S)\}.mak{$(R)\DEBUG\}.exe:
-    @echo Applying $(T).mak inference rule {$$(S)\}.mak{$$(R)\DEBUG\}.exe:
-    $(HEADLINE) Building $(@F) $(T) debug version
-    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.mak{$(R)\Debug\}.exe:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.mak{$$(R)\Debug\}.exe:
+    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" $(MAKEDEFS) exe.hl dirs $@
 
 # Inference rules to build a library, inferring the debug mode from the output path specified.
 {$(S)\}.mak{$(R)\}.lib:
-    @echo Applying $(T).mak inference rule {$$(S)\}.mak{$$(R)\}.lib:
-    $(HEADLINE) Building $(@F) $(T) release version
-    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" dirs $@
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.mak{$$(R)\}.lib:
+    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" $(MAKEDEFS) lib.hl dirs $@
 
-{$(S)\}.mak{$(R)\DEBUG\}.lib:
-    @echo Applying $(T).mak inference rule {$$(S)\}.mak{$$(R)\DEBUG\}.lib:
-    $(HEADLINE) Building $(@F) $(T) debug version
-    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.mak{$(R)\Debug\}.lib:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.mak{$$(R)\Debug\}.lib:
+    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" $(MAKEDEFS) lib.hl dirs $@
 
 # Inference rules to build a DLL, inferring the debug mode from the output path specified.
 {$(S)\}.mak{$(R)\}.dll:
-    @echo Applying $(T).mak inference rule {$$(S)\}.mak{$$(R)\}.dll:
-    $(HEADLINE) Building $(@F) $(T) release version
-    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" dirs $@
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.mak{$$(R)\}.dll:
+    $(SUBMAKE) "DEBUG=0" "PROGRAM=$(*F)" "_DLL=" $(MAKEDEFS) dll.hl dirs $@
 
-{$(S)\}.mak{$(R)\DEBUG\}.dll:
-    @echo Applying $(T).mak inference rule {$$(S)\}.mak{$$(R)\DEBUG\}.dll:
-    $(HEADLINE) Building $(@F) $(T) debug version
-    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" dirs $@
+{$(S)\}.mak{$(R)\Debug\}.dll:
+    @echo Applying $(T).mak inference rule (PROGRAM undefined) {$$(S)\}.mak{$$(R)\Debug\}.dll:
+    $(SUBMAKE) "DEBUG=1" "PROGRAM=$(*F)" "_DLL=" $(MAKEDEFS) dll.hl dirs $@
 
 !ELSE # if DEFINED(PROGRAM)
+
+MAKEDEFS="PROGRAM=$(PROGRAM)" $(MAKEDEFS)
+
+# Phony targets for displaying headlines for the given extension
+exe.hl lib.hl dll.hl obj.hl res.hl:
+    $(HEADLINE) Building $(PROGRAM).$* $(T) $(DM) version
+
+# Low level inference rules, with final paths, and all option macros set.
+
 # Inference rule for C++ compilation
 {$(S)\}.cpp{$(O)\}.obj:
     @echo Applying $(T).mak inference rule {$$(S)\}.cpp{$$(O)\}.obj:
+    if not exist $(L)\dirs.done $(SUBMAKE) $(MAKEDEFS) dirs &:# Unfortunately inference rule cannot have dependents
     $(MSG) Compiling $(<F) ...
     set INCLUDE=$(INCLUDE)
     set PATH=$(PATH)
-    $(REMOVE_UTF8_BOM) $< $(O)\$(<F)
-    $(CC) $(CXXFLAGS) /c $(TC) $(O)\$(<F) || $(REPORT_FAILURE)
+    $(REMOVE_UTF8_BOM) $< $(S2)\$(<F)
+    $(CC) $(CXXFLAGS) /c $(TC) $(S2)\$(<F) || $(REPORT_FAILURE)
     $(MSG) ... done.
 
 # Inference rule for C compilation
 {$(S)\}.c{$(O)\}.obj:
     @echo Applying $(T).mak inference rule {$$(S)\}.c{$$(O)\}.obj:
+    if not exist $(L)\dirs.done $(SUBMAKE) $(MAKEDEFS) dirs &:# Unfortunately inference rule cannot have dependents
     $(MSG) Compiling $(<F) ...
     set INCLUDE=$(INCLUDE)
     set PATH=$(PATH)
-    $(REMOVE_UTF8_BOM) $< $(O)\$(<F)
-    $(CC) $(CFLAGS) /c $(TC) $(O)\$(<F) || $(REPORT_FAILURE)
+    $(REMOVE_UTF8_BOM) $< $(S2)\$(<F)
+    $(CC) $(CFLAGS) /c $(TC) $(S2)\$(<F) || $(REPORT_FAILURE)
     $(MSG) ... done.
 
 # Inference rule for Assembly language.
 {$(S)\}.asm{$(O)\}.obj:
     @echo Applying $(T).mak inference rule {$$(S)\}.asm{$$(O)\}.obj:
+    if not exist $(L)\dirs.done $(SUBMAKE) $(MAKEDEFS) dirs &:# Unfortunately inference rule cannot have dependents
     $(MSG) Assembling $(<F) ...
     set INCLUDE=$(INCLUDE)
     set PATH=$(PATH)
@@ -591,14 +653,15 @@ SUBMAKE=$(MAKE) $(MAKEFLAGS_) /F "$(MAKEFILE)" $(MAKEDEFS) # Recursive call to t
 # Inference rule to compile Windows resources
 {$(S)\}.rc{$(O)\}.res:
     @echo Applying $(T).mak inference rule {$$(S)\}.rc{$$(O)\}.res:
+    if not exist $(L)\dirs.done $(SUBMAKE) $(MAKEDEFS) dirs &:# Unfortunately inference rule cannot have dependents
     $(MSG) Compiling $(<F) resources ...
     set INCLUDE=$(INCLUDE)
     set PATH=$(PATH)
     $(RC) /Fo$@ $(RFLAGS) /r $< || $(REPORT_FAILURE)
     $(MSG) ... done.
 
-{$(O)\}.rc{$(O)\}.res:
-    @echo Applying $(T).mak inference rule {$$(O)\}.rc{$$(O)\}.res:
+{$(S2)\}.rc{$(O)\}.res:
+    @echo Applying $(T).mak inference rule {$$(S2)\}.rc{$$(O)\}.res:
     $(MSG) Compiling $(<F) resources ...
     set INCLUDE=$(INCLUDE)
     set PATH=$(PATH)
@@ -639,7 +702,7 @@ $(LFLAGS)
 $**
 $(LIBS)
 /OUT:$@
-/SUBSYSTEM:WINDOWS /DLL /IMPLIB:$(B)\$(*B).lib
+/SUBSYSTEM:$(SUBSYSTEM) /DLL /IMPLIB:$(B)\$(*B).lib
 $(LFLAGS)
 <<NOKEEP
     @echo "	type $(L)\$(*B).link"
@@ -682,7 +745,7 @@ TMPMAK=$(TMP)\$(T)_vars.$(PID).mak # Using the shell PID to generate a unique na
 !ELSE IF EXIST("Files.mak")
 !  MESSAGE Getting specific rules from Files.mak.
 !  INCLUDE Files.mak
-!  IF DEFINED(PROGRAM) && ![$(STINCLUDE)\GetDefs.bat Files.mak $(PROGRAM) >"$(TMPMAK)" 2>NUL]
+!  IF DEFINED(PROGRAM) && ![$(NMINCLUDE)\GetDefs.bat Files.mak $(PROGRAM) >"$(TMPMAK)" 2>NUL]
 !    MESSAGE Getting specific definitions for $(PROGRAM) from Files.mak.
 !    INCLUDE $(TMPMAK)
 !  ENDIF
@@ -712,6 +775,11 @@ OBJECTS=$(O)\$(PROGRAM).obj $(O)\$(PROGRAM).res # If there's no $(PROGRAM).rc fi
 LIBS= # Avoid having them defined twice in the linker input list
 !ENDIF
 
+# Append the SUBSYSTEM version, if not present already
+!IF DEFINED(WINVER) && ("$(SUBSYSTEM:,=)" == "$(SUBSYSTEM)")
+SUBSYSTEM=$(SUBSYSTEM),$(WINVER:.=.0) # Link.exe SUBSYSTEM version format is M.mm, with M the major version, and mm the minor version
+!ENDIF
+
 # Generic rule to build program
 !IF DEFINED(PROGRAM) && (!EXIST("$(PROGRAM).manifest")) && EXIST("asInvoker.rc") # If no manifest is defined for PROGRAM
 # Then use the default asInvoker.manifest, that flags the WIN32 exe as Vista-aware
@@ -720,6 +788,7 @@ OBJECTS=$(OBJECTS) $(O)\asInvoker.res # asInvoker.rc includes asInvoker.manifest
 !ENDIF
 !MESSAGE OBJECTS=($(OBJECTS))
 !IF !DEFINED(SKIP_THIS)
+!IF "$(EXENAME)"!="$(PROGRAM).dll" # Avoid having two rules for build a DLL
 $(B)\$(EXENAME): $(OBJECTS:+=) $(LIBRARIES) # The dependency on libraries forces relinking if one of the libraries has changed
     @echo Applying $(T).mak build rule $$(B)\$$(EXENAME):
     $(MSG) Linking $(B)\$(@F) ...
@@ -738,6 +807,7 @@ $(LFLAGS)
     $(LK) @$(L)\$(*B).link || $(REPORT_FAILURE)
     $(POST_LINK_CMD)
     $(MSG) ... done.
+!ENDIF
 
 # Generic rule to build a static library
 $(B)\$(PROGRAM).lib: $(OBJECTS:+=) $(LIBRARIES)
@@ -762,7 +832,7 @@ $(B)\$(PROGRAM).dll: $(OBJECTS:+=) $(LIBRARIES) # The dependency on libraries fo
 $(OBJECTS:+=)
 $(LIBRARIES) $(LIBS)
 /OUT:$@
-/DLL /IMPLIB:$(B)\$(*B).lib
+/SUBSYSTEM:$(SUBSYSTEM) /DLL /IMPLIB:$(B)\$(*B).lib
 $(LFLAGS)
 <<KEEP
     @echo "	type $(L)\$(*B).link"
@@ -792,16 +862,33 @@ $(O):
     if not exist $(O) $(MSG) Creating directory $(O)
     if not exist $(O) mkdir $(O)
 
+$(I):
+    if not exist $(I) $(MSG) Creating directory $(I)
+    if not exist $(I) mkdir $(I)
+
 $(L):
     if not exist $(L) $(MSG) Creating directory $(L)
     if not exist $(L) mkdir $(L)
 
-!IF !DEFINED(SKIP_THIS)
-dirs: $(B) $(O) $(L) files
+$(S2):
+    if not exist $(S2) $(MSG) Creating directory $(S2)
+    if not exist $(S2) mkdir $(S2)
 
-files: $(UTF8_BOM_FILE) $(REMOVE_UTF8_BOM) $(CONV_SCRIPT)
+$(X):
+    if not exist $(X) $(MSG) Creating directory $(X)
+    if not exist $(X) mkdir $(X)
+
+!IF !DEFINED(SKIP_THIS)
+dirs: $(B) $(O) $(L) $(S2) files convert_C_sources $(L)\dirs.done
+
+$(L)\dirs.done:
+    echo %DATE% %TIME% >$@ &:# Proof that all dirs were created
+
+files: $(X) $(UTF8_BOM_FILE) $(REMOVE_UTF8_BOM) \
+       $(CONV_SCRIPT) $(CONV_SOURCES) $(CONFIG_H)
 !ELSE
 dirs files: skip_this
+    echo>con SKIPPED
     @rem This rem prevents inference rules from firing. Do not remove.
 !ENDIF
 
@@ -819,6 +906,15 @@ $(UTF8_BOM_FILE): "$(THIS_MAKEFILE)"
 	WriteBinaryFile(args(0), szBOM);
 	WScript.Quit(0);
 <<NOKEEP
+
+$(CONFIG_H): $(I) "$(THIS_MAKEFILE)" config.$(CONFNAME).bat
+    $(MSG) Generating include file $@
+    copy <<$@ NUL
+/* OS & Compiler-specific definitions, usually created by ./configure Unix scripts */
+#define UNUSED_ARG(arg_name) (void)arg_name /* Avoid an unused argument warning. No code generated. */
+<<KEEP
+    (for %%v in ($(HAS_SDK_LIST)) do @echo #define %%v 1) >>$@
+    echo>$(CONFIG_I) #include ^<config.h^>
 
 $(REMOVE_UTF8_BOM): "$(THIS_MAKEFILE)"
     $(MSG) Generating script $@
@@ -856,7 +952,9 @@ $(REMOVE_UTF8_BOM): "$(THIS_MAKEFILE)"
 	endlocal & exit /b 0
 	:main
 	:# Main action: Remove the UTF-8 BOM, if present in the C source
-	findstr /B /G:$(UTF8_BOM_FILE) <"%~1" >NUL
+	:# Some old versions of findstr.exe hang if the data is input from stdin,
+	:# and if the last line does not end with a LF. So use "%~1", not <"%~1".
+	findstr /B /G:$(UTF8_BOM_FILE) "%~1" >NUL
 	if errorlevel 1 (
 	  echo No UTF-8 BOM in "%~1". Copying the file.
 	  copy /y "%~1" "%~2"
@@ -869,7 +967,9 @@ $(REMOVE_UTF8_BOM): "$(THIS_MAKEFILE)"
 	set "PROGRAM.ver=%~dpn2.ver.h"
 	echo Generating !PROGRAM.ver!
 	:# Extract the PROGRAM_* definitions from the C source
-	findstr /C:"#define PROGRAM_" < "%~1" > "!PROGRAM.ver!" 2>NUL &:# Don't use /B to allow flagging other lines to copy with a /* #define PROGRAM_ */ comment
+	:# Some old versions of findstr.exe hang if the data is input from stdin,
+	:# and if the last line does not end with a LF. So use "%~1", not <"%~1".
+	findstr /C:"#define PROGRAM_" "%~1" > "!PROGRAM.ver!" 2>NUL &:# Don't use /B to allow flagging other lines to copy with a /* #define PROGRAM_ */ comment
 	:# Then split the program version into its MAJOR.MINOR.PATH.BUILD components
 	set "PROGRAM_VERSION="
 	for %%v in (PROGRAM_VERSION PROGRAM_DATE) do if not defined PROGRAM_VERSION ( :# Fall back to using PROGRAM_DATE if there's no PROGRAM_VERSION
@@ -937,17 +1037,57 @@ $(CONV_SCRIPT): "$(THIS_MAKEFILE)"	# Poor man's version of conv.exe, limited to 
 	WScript.Quit(0);
 <<KEEP
 
+$(CONV_SOURCES): "$(THIS_MAKEFILE)"
+    $(MSG) Generating script $@
+    copy <<$@ NUL
+        @echo off
+        :# If config.$(CONFNAME).bat changed, then ALL sources must be converted
+	set "DESTDIR="
+	if not exist $(CONVERT_STAMP) (
+	  set "DESTDIR=NOWHERE" & rem :# Makes sure that xcopy will list every file as needing to be copied
+	) else for %%f in ("$(THIS_MAKEFILE)" config.$(CONFNAME).bat) do (
+	  if not defined DESTDIR for /f "usebackq delims=: tokens=2" %%x in (
+	    `xcopy /c /d /l /y %%f $(CONVERT_STAMP) 2^>NUL ^| findstr ":"`
+	  ) do set "DESTDIR=NOWHERE" & rem :# Makes sure that xcopy will list every file as needing to be copied
+	)
+	if not defined DESTDIR set "DESTDIR=$(S2)" &:# Makes sure xcopy only reports the files that have changed
+	:# Enumerate the files that need being converted
+	set "MSGDONE="
+	for %%e in (h c r cpp) do for /f "delims=: tokens=2" %%f in (
+	  'xcopy /c /d /i /l /y *.%%e %DESTDIR% 2^>NUL ^| findstr ":"'
+	) do (
+	  if not defined MSGDONE (
+	    set "MSGDONE=1"
+	    $(MSG) Updating localized C sources in $(S2) ...
+	  )
+	  $(MSG) %%f
+	  call $(REMOVE_UTF8_BOM) %%f $(S2)\%%f
+	)
+	if defined MSGDONE (
+	  >$(CONVERT_STAMP) echo %DATE% %TIME%
+	  >con echo ... done.
+	)
+<<KEEP
+
+# Remove BOMs from all modified C source and include files
+convert_C_sources: files $(S2) NUL
+    $(CONV_SOURCES)
+
 # Erase all output files
-clean:
+clean: NUL
     -rd /S /Q $(R)	>NUL 2>&1
     -del /Q *.pdb	>NUL 2>&1
     -del /Q *.ncb	>NUL 2>&1
     -del /Q *.suo	>NUL 2>&1
     -del /Q *.bak	>NUL 2>&1
     -del /Q *~		>NUL 2>&1
+!IF DEFINED(PROGRAM) && DEFINED(LIBDIR) && EXIST("$(LIBDIR)")
+    -del "$(LIBDIR)\$(PROGRAM)$(LSX0).lib" "$(LIBDIR)\$(PROGRAM)$(LSX0)d.lib" >NUL 2>&1
+    -rd $(LIBDIR)	>NUL 2>&1 &:# Remove the lib directory if it's empty
+!ENDIF
 
 # Help message describing the targets
-help:
+help: NUL
     type <<
 Targets:
   clean                   Erase all files in the $(R) directory

@@ -20,6 +20,9 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <malloc.h>
+#include <errno.h>
+
+#include "debugm.h"	/* SysToolsLib debugging macros */
 
 #ifdef _WIN32	/* Automatically defined when targeting a Win32 application */
 
@@ -65,7 +68,7 @@ char *_fullpathU(char *absPath, const char *relPath, size_t maxLength) {
     if (!absPath0) free(absPath);
     return NULL;
   }
-  if (!absPath0) absPath = realloc(absPath, strlen(absPath) + 1);
+  if (!absPath0) absPath = ShrinkBuf(absPath, strlen(absPath) + 1);
   return absPath;
 }
 

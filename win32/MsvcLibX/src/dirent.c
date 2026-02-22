@@ -37,6 +37,16 @@
 *    2018-02-28 JFL Fixed alphasort() when files differ only by case.	      *
 *    2018-03-06 JFL Fixed a warning with Visual Studio 2015.         	      *
 *    2020-12-15 JFL Added support for IO_REPARSE_TAG_APPEXECLINK.             *
+*    2021-11-10 JFL Added integer directory handles, and function dirfd().    *
+*    2025-07-29 JFL Fixed the reparse point tag analysis in readdirW().       *
+*    2025-08-03 JFL Preserve the FILE_ATTRIBUTE_REPARSE_POINT bit in all cases.
+*		    Recognize Linux socket, fifo, character, and block devices.
+*    2025-11-11 JFL Prevent a "varargs matches remaining parameters" warning. *
+*    2025-11-23 JFL Make sure the debug output prints unsigned sizes.         *
+*    2025-11-25 JFL Fixed the MSDOS readdir() errno handling.                 *
+*    2026-02-03 JFL Moved the conversion of the Win32 attributes and reparse  *
+*		    tag to a C file type to new routine MlxAttrAndTag2Type(). *
+*    2026-02-10 JFL Make sure readdir() at least clears the d_ino field.      *
 *		    							      *
 *         © Copyright 2016 Hewlett Packard Enterprise Development LP          *
 * Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 *
@@ -60,6 +70,49 @@
 #include <unistd.h>	/* For readlink() */
 #include <sys/stat.h>	/* For Filetime2String() */
 #include "debugm.h"	/* Use our house debugging framework */
+
+/* Manage pseudo integer directory file descriptors */
+static int nDirFDs = 0;
+static DIR **ppDirs = NULL; /* The index of each pointer is its pseudo file descriptor */
+
+DIR *FD2dir(int iFD) {			/* Convert a file descriptorFD to a DIR* */
+  if ((iFD < 0) || (iFD >= nDirFDs)) return NULL;
+  return ppDirs[iFD];
+}
+
+static int FindDirFD(DIR *pDir) {	/* Convert a DIR* to a file descriptor */
+  int i;
+  for (i=0; i<nDirFDs; i++) if (ppDirs[i] == pDir) return i; /* Found */
+  return -1;
+}
+
+static int NewDirFD(DIR *pDir) {	/* Allocate a new file descriptor */
+  int i = FindDirFD(NULL);
+  if (i == -1) { /* No free entry. Allocate a new block of directory pointers */
+    int nNeeded = nDirFDs + 5;
+    DIR **ppDirs2 = (DIR **)realloc(ppDirs, nNeeded  * sizeof(DIR *));
+    if (!ppDirs2) return -1;
+    for (i=nDirFDs+1; i<nNeeded; i++) ppDirs2[i] = NULL;
+    i = nDirFDs; /* And use the first entry allocated */
+    nDirFDs = nNeeded;
+    ppDirs = ppDirs2;
+  }
+  ppDirs[i] = pDir;
+  return i;
+}
+
+static void FreeDirFD(DIR *pDir) {	/* Free a file descriptor */
+  int i = FindDirFD(pDir);
+  if (i >= 0) ppDirs[i] = NULL; /* Found. Free it. */
+  return;
+}
+
+/* Standard routine for converting a DIR * to an integer directory handle */
+int dirfd(DIR *pDir) {
+  int i = FindDirFD(pDir);
+  if (i == -1) errno = EINVAL;
+  return i;
+}
 
 /*****************************************************************************\
 *                                                                             *
@@ -86,6 +139,8 @@ void put_dta(char *p_dta) {	/* Set the MS-DOS Disk Transfer Address */
 
 #define CF 0x0001            /* Carry flag bit mask */
 
+/* Call MS-DOS function 43H "Get File Attributes" */
+/* The DOS error code is returned in _doserrno, and the C error code in errno */
 int get_file_attributes(const char *name, unsigned *pAttr) {	/* Get File Attributes */
   union REGS inreg;
   union REGS outreg;
@@ -119,6 +174,8 @@ static int report_workaround(char *s) {
 #define REPORT_WORKAROUND(args) 1
 #endif
 
+/* Call MS-DOS function 4EH "Find First Matching File" */
+/* The DOS error code is returned in _doserrno, and the C error code in errno */
 int srch1st(char *pszFile, uint16_t wAttr, fileinfo *pInfo) { /* Search first matching file */
   union REGS inreg;
   union REGS outreg;
@@ -137,7 +194,7 @@ int srch1st(char *pszFile, uint16_t wAttr, fileinfo *pInfo) { /* Search first ma
   intdosx(&inreg, &outreg, &sregs);
 
   if (CF & outreg.x.cflag) {
-    DEBUG_LEAVE(("return %d; // DOS error code\n", outreg.x.ax));
+    DEBUG_LEAVE(("return %d; // _doserrno=%d; errno=%d - %s\n", outreg.x.ax, _doserrno, errno, strerror(errno)));
     return (int)(outreg.x.ax);
   }
 
@@ -147,6 +204,8 @@ int srch1st(char *pszFile, uint16_t wAttr, fileinfo *pInfo) { /* Search first ma
   return 0;
 }
 
+/* Call MS-DOS function 4FH "Find Next Matching File" */
+/* The DOS error code is returned in _doserrno, and the C error code in errno */
 int srchnext(fileinfo *pInfo) { /* Search next matching file */
   union REGS inreg;
   union REGS outreg;
@@ -162,7 +221,7 @@ int srchnext(fileinfo *pInfo) { /* Search next matching file */
     intdos(&inreg, &outreg);
 
     if (CF & outreg.x.cflag) {
-      DEBUG_LEAVE(("return %d; // DOS error code\n", outreg.x.ax));
+      DEBUG_LEAVE(("return %d; // _doserrno=%d; errno=%d - %s\n", outreg.x.ax, _doserrno, errno, strerror(errno)));
       return(outreg.x.ax);
     }
   } while ((!strncmp(previousFI.fiFileName, pInfo->fiFileName, sizeof(previousFI)))
@@ -174,6 +233,7 @@ int srchnext(fileinfo *pInfo) { /* Search next matching file */
   return 0;
 }
 
+/* Standard C library opendir() */
 DIR *opendir(const char *name) { /* Open a directory */
   DIR *pDir = NULL;
   size_t lName;
@@ -187,12 +247,13 @@ opendir_noent:
     errno = ENOENT;
 opendir_failed:
     if (!_sys_errlist[ENOTDIR][0]) _sys_errlist[ENOTDIR] = "Not a directory"; /* Workaround for the missing entry in MSVC list */
-    if (pDir) free(pDir);
+    free(pDir);
     DEBUG_LEAVE(("return NULL; // errno=%d - %s\n", errno, strerror(errno)));
     return NULL;
   }
   pDir = (DIR *)malloc(sizeof(DIR) + lName + 5); /* + 5 for wildcards suffix */
   if (!pDir) goto opendir_failed;
+  if (NewDirFD(pDir) == -1) goto opendir_failed;
   /* Work on a copy of the directory name */
   pszCopy = (char *)(pDir + 1);
   strcpy(pszCopy, name);
@@ -210,12 +271,17 @@ opendir_failed:
   return pDir;
 }
 
+/* Standard C library closedir() */
 int closedir(DIR *pDir) { /* Close the directory. Return 0 if successful, -1 if not. */
   DEBUG_PRINTF(("closedir(0x%p);\n", pDir));
-  if (pDir) free(pDir);
+  if (pDir) {
+    FreeDirFD(pDir);
+    free(pDir);
+  }
   return 0;
 }
 
+/* Standard C library readdir() */
 _dirent *readdir(DIR *pDir) { /* Read a directory entry. Return pDir, or NULL for EOF or error. */
   int iErr;
   _dirent *pDirent = &pDir->sDirent;
@@ -232,10 +298,11 @@ _dirent *readdir(DIR *pDir) { /* Read a directory entry. Return pDir, or NULL fo
     iErr = srchnext(pFI);
   }
   if (!iErr) {
+    pDirent->d_ino = 0; /* TO DO: Get the actual value, if this is not too costly */
     pDirent->d_type = DT_REG;			/* A normal file by default */
     if (pDirent->d_attribs & _A_SUBDIR) pDirent->d_type = DT_DIR;  /* Subdirectory */
     if (pDirent->d_attribs & _A_VOLID) pDirent->d_type = DT_VOLID; /* Volume ID file */
-    DEBUG_LEAVE(("return 0x%p; // %s %02X %10ld %s\n",
+    DEBUG_LEAVE(("return 0x%p; // %s %02X %10lu %s\n",
 		  pDirent,
 		  Filetime2String(pDirent->d_date, pDirent->d_time, szTime, sizeof(szTime)),
 		  pDirent->d_attribs,
@@ -243,16 +310,10 @@ _dirent *readdir(DIR *pDir) { /* Read a directory entry. Return pDir, or NULL fo
 		  pDirent->d_name));
     return &pDir->sDirent;
   }
-  switch (iErr) { /* Correct a few errors that do not map well to C library errors */
-    case ESRCH: iErr = ENOTDIR; break;
-    case EXDEV: iErr = 0; break;	/* End of files is NOT an error */
+  switch (errno) { /* Correct DOS errors that do not map well to standard C library errors */
+    case ENOENT: iErr = errno = 0; break; /* End of files is NOT an error according to Unix spec */
   }
-  if (iErr) {
-    errno = iErr; /* MS-DOS' errno.h maps C-library errnos to DOS' errors */
-    DEBUG_LEAVE(("return NULL; // errno=%d - %s\n", errno, strerror(errno)));
-  } else {
-    DEBUG_LEAVE(("return NULL; // End of directory\n"));
-  }
+  DEBUG_LEAVE(("return NULL; // errno=%d - %s\n", errno, errno ? strerror(errno) : "End of directory"));
   return NULL;
 }
 
@@ -303,6 +364,10 @@ return_ENOMEM:
     errno = ENOMEM;
     goto return_err;
   }
+  if (NewDirFD(pDir) == -1) { /* Failed to allocate a new file descriptor */
+    free(pDir);
+    goto return_err;
+  }
   lName = lstrlenW(wszName);
   pDir->pwszDirName = malloc(sizeof(WCHAR) * (lName + 1));
   if (!pDir->pwszDirName) {
@@ -331,6 +396,7 @@ DIR *opendirM(const char *pszName, UINT cp) { /* Open a directory - MultiByte ch
 int closedir(DIR *pDir) { /* Close the directory. Return 0 if successful, -1 if not. */
   DEBUG_PRINTF(("closedir(0x%p);\n", pDir));
   if (pDir) {
+    FreeDirFD(pDir);
     free(pDir->pwszDirName);
     if (pDir->hFindFile != INVALID_HANDLE_VALUE) FindClose(pDir->hFindFile);
     pDir->hFindFile = INVALID_HANDLE_VALUE;
@@ -343,8 +409,6 @@ int closedir(DIR *pDir) { /* Close the directory. Return 0 if successful, -1 if 
 _dirent *readdirW(DIR *pDir) {
   int iErr = 0;
   _dirent *pDirent = &pDir->sDirent;
-  int bIsJunction = FALSE;
-  int bIsMountPoint = FALSE;
   DWORD dwTag = 0; /* Reparse points tag */
   DWORD dwAttr;
   int n;
@@ -395,74 +459,11 @@ _dirent *readdirW(DIR *pDir) {
 
   /* Set the standard fields */
   lstrcpyW((WCHAR *)(pDirent->d_name), pDir->wfd.cFileName);
+  pDirent->d_ino = 0; /* TO DO: Get the actual value, if this is not too costly */
   dwAttr = pDir->wfd.dwFileAttributes;
-check_attr_again:
-  if (dwAttr & FILE_ATTRIBUTE_REPARSE_POINT) {
-    /* JUNCTIONs and SYMLINKDs both have the FILE_ATTRIBUTE_DIRECTORY flag also set.
-    // Test the FILE_ATTRIBUTE_REPARSE_POINT flag first, to make sure they're seen as symbolic links.
-    //
-    // All symlinks are reparse points, but not all reparse points are symlinks. */
-    dwTag = pDir->wfd.dwReserved0;	/* No need to call GetReparseTag(), we got it already. */
-    switch (dwTag) {
-      case IO_REPARSE_TAG_MOUNT_POINT:	/* NTFS junction or mount point */
-	{ /* We must read the link to distinguish junctions from mount points. */
-	WCHAR *pwszPath = NULL;
-	WCHAR *pwszBuf = NULL;
-	ssize_t lwszDirName = lstrlenW(pDir->pwszDirName);
-	ssize_t lwPath = lwszDirName + 1 + lstrlenW(pDir->wfd.cFileName) + 1;
-	ssize_t lwBuf = PATH_MAX; /* This will be sufficient in most cases, If not, the buf will be extended below */
-	ssize_t lLink;
-	pwszPath = malloc(sizeof(WCHAR) * lwPath);
-	if (!pwszPath) {
-return_ENOMEM:
-	  DEBUG_LEAVE(("return NULL; // Out of memory\n"));
-	  return NULL;
-	}
-	bIsMountPoint = TRUE;
-	lstrcpyW(pwszPath, pDir->pwszDirName);
-	if (lwszDirName && (pwszPath[lwszDirName-1] != L'\\')) pwszPath[lwszDirName++] = L'\\';
-	lstrcpyW(pwszPath+lwszDirName, pDir->wfd.cFileName);
-realloc_wBuf:
-	pwszBuf = malloc(sizeof(WCHAR) * lwBuf);
-	if (!pwszBuf) {
-	  free(pwszPath);
-	  goto return_ENOMEM;
-	}
-	lLink = readlinkW(pwszPath, pwszBuf, lwBuf);
-	/* Junction targets are absolute pathnames, starting with a drive letter. Ex: C: */
-	/* readlink() fails if the reparse point does not target a valid pathname */
-	if (lLink < 0) {
-	  if (errno == ENAMETOOLONG) { /* The output buffer was too small. Retry with a bigger one */
-	    free(pwszBuf); /* No need to copy the old content */
-	    lwBuf *= 2;
-	    goto realloc_wBuf;
-	  }
-	  free(pwszPath);
-	  free(pwszBuf);
-	  goto this_is_not_a_symlink; /* This is not a junction. */
-	}
-	bIsJunction = TRUE; /* Else this is a junction. Fall through to the symlink case. */
-	free(pwszPath);
-	free(pwszBuf);
-	}
-	/* Fall through to the symlink case. */
-      case IO_REPARSE_TAG_SYMLINK:		/* NTFS symbolic link */
-      case IO_REPARSE_TAG_NFS:			/* NFS symbolic link */
-      case IO_REPARSE_TAG_LX_SYMLINK:		/* LinuX subsystem symlink */
-      case IO_REPARSE_TAG_APPEXECLINK:		/* UWP application execution link */
-	pDirent->d_type = DT_LNK;		/* Symbolic link */
-	break;
-      default:	/* Anything else is definitely not like a Unix symlink */
-this_is_not_a_symlink:
-	dwAttr &= ~FILE_ATTRIBUTE_REPARSE_POINT;
-	goto check_attr_again;
-    }
-  } else if (dwAttr & FILE_ATTRIBUTE_DIRECTORY)
-    pDirent->d_type = DT_DIR;		/* Subdirectory */
-  else if (dwAttr & FILE_ATTRIBUTE_DEVICE)
-    pDirent->d_type = DT_CHR;		/* Device (we don't know if character or block) */
-  else
-    pDirent->d_type = DT_REG;		/* A normal file by default */
+  dwTag = pDir->wfd.dwReserved0;	/* No need to call GetReparseTag(), we got it already. */
+  /* Make sure that what is set here is consistent with what lstat() sets in lstat.c */
+  pDirent->d_type = MlxAttrAndTag2Type(pDir->pwszDirName, pDir->wfd.cFileName, dwAttr, dwTag);
 
   /* Set the OS-specific extensions */
   lstrcpyW((WCHAR *)(pDirent->d_shortname), pDir->wfd.cAlternateFileName);
@@ -475,7 +476,7 @@ this_is_not_a_symlink:
   (*(ULARGE_INTEGER *)&(pDirent->d_filesize)).HighPart = pDir->wfd.nFileSizeHigh;
 
   DEBUG_WSTR2NEWUTF8((WCHAR *)(pDirent->d_name), pszUtf8);
-  DEBUG_LEAVE(("return 0x%p; // %s 0x%05X %10lld %s\n",
+  DEBUG_LEAVE(("return 0x%p; // %s 0x%05X %10llu %s\n",
 		pDirent,
 		Filetime2String(&pDirent->d_LastWriteTime, szTime, sizeof(szTime)),
 		(int)(pDirent->d_attribs),
@@ -612,6 +613,12 @@ DIR *opendir(const char *name) { /* Open a directory */
   }
   pDir = malloc(sizeof(DIR));
   if (pDir) {
+    if (NewDirFD(pDir) == -1) { /* Failed to allocate a new file descriptor */
+      free(pDir);
+      pDir = NULL;
+    }
+  }
+  if (pDir) {
     pDir->hDir = -1;
     pDir->bAttrReq = _A_HIDDEN | _A_SYSTEM | _A_SUBDIR;
     pDir->bAttrCmp = 0;
@@ -625,6 +632,7 @@ int closedir(DIR *pDir) { /* Close the directory. Return 0 if successful, -1 if 
   DEBUG_PRINTF(("closedir(0x%p);\n", pDir));
   if (pDir) {
     srchdone(pDir);
+    FreeDirFD(pDir);
     free(pDir);
   }
   return 0;
@@ -643,7 +651,7 @@ _dirent *readdir(DIR *pDir) { /* Read a directory entry. Return pDir, or NULL fo
     return NULL;
   }
 
-  DEBUG_LEAVE(("return 0x%p; // OS/2 found: %04X %04X %02X %10lld %s\n",
+  DEBUG_LEAVE(("return 0x%p; // OS/2 found: %04X %04X %02X %10llu %s\n",
 		&pDir->sDirent
 		(int)(pDirent->time),
 		(int)(pDirent->date),
@@ -725,11 +733,12 @@ int scandir(const char *pszName,
   closedir(pDir);
 
 /* 2016-09-23 JFL I don't understand why this warning still fires, so leaving it enabled for now */
-#ifdef M_I86TM /* This warning appears only when compiling for the DOS tiny memory model ?!? */
-/* #pragma warning(disable:4220) /* Ignore the "varargs matches remaining parameters" warning */
+/* 2025-11-11 JFL This now fires for both the small and tiny memory models ?!? */
+#if defined(_M_I86TM) || defined(_M_I86SM)
+#pragma warning(disable:4220) /* Ignore the "varargs matches remaining parameters" warning */
 #endif
   if (cbCompare) qsort(pList, n, sizeof(_dirent *), cbCompare);
-#ifdef M_I86TM
+#if defined(_M_I86TM) || defined(_M_I86SM)
 #pragma warning(default:4220) /* Ignore the "varargs matches remaining parameters" warning */
 #endif
   *resultList = pList;

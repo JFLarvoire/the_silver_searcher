@@ -34,6 +34,9 @@
 #error The msvclibx library is designed for use with the Microsoft Visual C/C++ tools only.
 #endif
 
+/* Control MsvcLibX options */
+#define _USE_EXTENDED_STAT_STRUCT 1	/* 1=Redefine our own stat structure */
+
 /* Compute the OS-specific suffix */
 #if defined(_WIN64)
 #  if defined(_M_X64) || defined(_M_AMD64)
@@ -85,23 +88,21 @@
 #pragma message("Adding pragma comment(lib, \"" _MSVCLIBX_LIB "\")")
 #pragma comment(lib, _MSVCLIBX_LIB)
 
-/* Library-specific routine used internally by many standard routines */
 #if defined(_WIN32)
-extern int Win32ErrorToErrno(); /* Converts the last WIN32 error to a Posix error code */
-#ifndef ELOOP	/* Defined in VS10's errno.h, but not in VS9 */
-#define ELOOP           114
-#endif
 /* Convert an ANSI or UTF-8 or OEM pathname to a Unicode string. Defined in mb2wpath.c. */
-typedef unsigned int UINT;  /* Defined in windef.h */
-typedef char* LPSTR; /* Defined in winnt.h */
-typedef const char* LPCSTR; /* Defined in winnt.h */
+typedef unsigned int UINT;	/* Defined in windef.h */
+typedef char* LPSTR;		/* Defined in winnt.h */
+typedef const char* LPCSTR;	/* Defined in winnt.h */
 #ifndef _WCHAR_T_DEFINED
 typedef unsigned short wchar_t; /* Defined in crtdefs.h */
 #define _WCHAR_T_DEFINED
 #endif
-typedef wchar_t* LPWSTR;    /* Defined in winnt.h */
-typedef const wchar_t* LPCWSTR;    /* Defined in winnt.h */
+typedef wchar_t* LPWSTR;	/* Defined in winnt.h */
+typedef const wchar_t* LPCWSTR;	/* Defined in winnt.h */
+typedef int BOOL;		/* Defined in windef.h */
 /* Routines in mb2wpath.c */
+extern BOOL MlxIsDosDeviceW(LPCWSTR pwszPathname);
+extern BOOL MlxIsAbnormalPathW(LPCWSTR pwszPathname);
 extern int CorrectWidePath(LPWSTR pwszName, LPWSTR pwszBuf, int nWideBufSize);
 extern LPWSTR CorrectNewWidePath(LPWSTR pwszName);
 extern int MultiByteToWidePath(UINT nCodePage, LPCSTR pszName, LPWSTR pwszName, int nWideBufSize);

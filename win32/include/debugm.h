@@ -5,7 +5,7 @@
 *   Description     Debug macros					      *
 *		    							      *
 *   Notes	    OS-independant macros for managing distinct debug and     *
-*		    release versions of a C or C++ program.		      * 
+*		    release versions of a C or C++ program.		      *
 *		    The debug version is generated if the _DEBUG constant     *
 *		    is defined. Else the release version is generated.	      *
 *		    These macros produce no extra code in the release version,*
@@ -141,6 +141,9 @@
 *    2020-07-24 JFL Rewrote debug_printf() to use the standard asprintf() as  *
 *		    much as possible.					      *
 *    2020-12-11 JFL Added XDEBUG_WPRINTF and RETURN_DWORD* macros.            *
+*    2022-02-17 JFL Added the INLINE macro, and ShrinkBuf() inline function.  *
+*    2023-10-15 JFL Added macro DEBUG_PRINT_INT_VAR().                        *
+*    2025-12-03 JFL Make sure ShrinkBuf() preserves errno.                    *
 *		    							      *
 *	 (C) Copyright 2016 Hewlett Packard Enterprise Development LP	      *
 * Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 *
@@ -148,11 +151,14 @@
 
 #ifndef _DEBUGM_H
 #define _DEBUGM_H	1
-								  
+
+#ifndef __CLIBDEF_H__
 #include <stdio.h>	/* Macros use printf */
 #include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>	/* Macros use malloc */
+#include <errno.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -176,6 +182,26 @@ extern "C" {
 
 #if defined(HAS_MSVCLIBX) || defined(GNU_SOURCE)  /* If we have MsvcLibX or GNU asprintf() functions, use them */
 #define _DEBUG_USE_ASPRINTF 1
+#endif
+
+/* General purpose C definitions, useful beyond debugging */
+#if defined(_MSC_VER) && (_MSC_VER < 1800) && !defined(__cplusplus)
+#define INLINE __inline	/* The MSVC compiler defines inline for C++, but not for C */
+#pragma warning(disable:4505) /* Avoid warnings "unreferenced local function has been removed" */
+#else
+#define INLINE inline	/* All other modern compilers define inline for C99, and C++ compilers always had it */
+#endif
+/* Reallocate a buffer to a smaller size, if possible */
+#if !(defined(_BIOS) || defined(_LODOS))
+static INLINE void *ShrinkBuf(void *old_buf, size_t new_size) { /* Make it inline since it's so trivial */
+  int e = errno;
+  void *new_buf = realloc(old_buf, new_size); /* This may fail, even for a smaller size */
+  if (new_buf) return new_buf;
+  errno = e;		/* Restore the initial errno, which was overwritten by the failing realloc */
+  return old_buf;	/* In case of failure, keep using the larger buffer */
+}
+#else
+#define ShrinkBuf(old_buf, new_size) (old_buf) /* Make it a noop as BiosLib & LoDosLib don't have realloc() */
 #endif
 
 /* #undef _DEBUG_USE_ASPRINTF // For testing the alternate implementation */
@@ -231,8 +257,7 @@ int debug_vasprintf(char **ppszBuf, const char *pszFormat, va_list vl) {		    \
     n = debug_vsnprintf(pBuf = pBuf2, nBufSize, pszFormat, (nBufSize == 128) ? vl : vl2);   \
     va_end(vl2);									    \
     if ((n >= 0) && (n < nBufSize)) { /* Success, now we know the necessary size */	    \
-      pBuf2 = (char *)realloc(pBuf, n+1); /* Free the unused space in the end - May fail */ \
-      *ppszBuf = pBuf2 ? pBuf2 : pBuf;	  /* Return the valid one */			    \
+      *ppszBuf = (char *)ShrinkBuf(pBuf, n+1); /* Free the unused space in the end */	    \
       va_end(vl0);									    \
       return n;										    \
     } /* Else if n == nBufSize, actually not success, as there's no NUL in the end */	    \
@@ -324,7 +349,7 @@ extern char *debug_dasprintf(const char *fmt, ...);	  /* Shorter alternative use
 				   Debug code executed if debug mode is on */
 #define XDEBUG_CODE_IF_ON(code) DEBUG_CODE(if (XDEBUG_IS_ON()) {code}) /*
 				   Debug code executed if extra debug mode is on */
-				   
+
 extern DEBUG_TLS int iIndent;	/* Debug messages indentation. Thread local. */
 #define DEBUG_INDENT_STEP 2	/* How many spaces to add for each indentation level */
 #define DEBUG_PRINT_INDENT() printf("%*s", iIndent, "")
@@ -483,6 +508,8 @@ extern DEBUG_TLS int iIndent;	/* Debug messages indentation. Thread local. */
 
 #endif /* defined(_DEBUG) */
 
+#define DEBUG_PRINT_INT_VAR(var) DEBUG_PRINTF((#var " = %d\n", (int)(var)))
+
 #define STRINGIZE(s) #s		   /* Convert a macro name to a string */
 #define VALUEIZE(s) STRINGIZE(s)   /* Convert a macro value to a string */
 #define MACRODEF(s) "#define " #s " " STRINGIZE(s)
@@ -529,4 +556,3 @@ extern DEBUG_TLS int iIndent;	/* Debug messages indentation. Thread local. */
 #endif
 
 #endif /* !defined(_DEBUGM_H) */
-

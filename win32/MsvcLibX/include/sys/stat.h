@@ -22,7 +22,12 @@
 *    2017-09-01 JFL Bug fix: Sockets and Fifos ARE supported in WIN32. Enable *
 *		    macros S_ISSOCK and S_ISFIFO.			      *
 *    2018-05-31 JFL Changed dirent2stat() first arg to (const _dirent *).     *
-*									      *
+*    2025-12-06 JFL Renamed GetFileID() as GetFileIDEx(), adding a third      *
+*		    argument, and redefining the old name as a macro.	      *
+*    2026-01-12 JFL Added GetFileInformationByHandleEx() access definitions.  *
+*    2026-02-03 JFL Added the prototype for MlxAttrAndTag2Type().	      *
+*    2026-02-17 JFL Added struct _FILE_ATTRIBUTE_TAG_INFO, etc.		      *
+*		    							      *
 *         © Copyright 2016 Hewlett Packard Enterprise Development LP          *
 * Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 *
 \*****************************************************************************/
@@ -115,8 +120,6 @@ extern char *Filetime2String(uint16_t date, uint16_t time, char *pBuf, size_t nB
   #define _STAT_SUFFIX 
 #endif
 
-#define _USE_EXTENDED_STAT_STRUCT 1
-
 #define _VALUEOF(a) a				/* Get the token value */
 #define _CONCAT2T(a,b) a##b			/* Concatenate two tokens (does not expand their values) */
 #define _CONCAT3T(a,b,c) a##b##c		/* Concatenate three tokens (does not expand their values) */
@@ -149,7 +152,7 @@ extern char *Filetime2String(uint16_t date, uint16_t time, char *pBuf, size_t nB
 #define _lstati64_ns _lstat64_ns
 #endif
 
-#if !_USE_EXTENDED_STAT_STRUCT
+#if !_USE_EXTENDED_STAT_STRUCT /* Option control macro defined in msvclibx.h */
   #define _NS_SUFFIX
 #else /* _USE_EXTENDED_STAT_STRUCT */
   #define _MSVCLIBX_STAT_DEFINED 1
@@ -162,13 +165,13 @@ extern char *Filetime2String(uint16_t date, uint16_t time, char *pBuf, size_t nB
 #pragma message("Defining type struct " VALUEIZE(_LIBX_stat))
   struct _LIBX_stat {
     /* MSVC standard stat structure fields */
-    _dev_t          st_dev;
-    _ino_t          st_ino;
+    dev_t           st_dev;
+    ino_t           st_ino;
     unsigned short  st_mode;
     short           st_nlink;
     short           st_uid;
     short           st_gid;
-    _dev_t          st_rdev;
+    dev_t           st_rdev;
     off_t           st_size;
     /* End of MSVC standard stat structure fields */
     struct timespec st_ctim;		/* File creation date/time,  w. ns resolution */
@@ -190,13 +193,13 @@ extern char *Filetime2String(uint16_t date, uint16_t time, char *pBuf, size_t nB
 #pragma message("Defining type struct " VALUEIZE(_LIBX_stat64))
     struct _LIBX_stat64 {
       /* MSVC standard stat structure fields */
-      _dev_t          st_dev;
-      _ino_t          st_ino;
+      dev_t           st_dev;
+      ino_t           st_ino;
       unsigned short  st_mode;
       short           st_nlink;
       short           st_uid;
       short           st_gid;
-      _dev_t          st_rdev;
+      dev_t           st_rdev;
       off64_t         st_size;
       /* End of MSVC standard stat structure fields */
       struct timespec st_ctim;		/* File creation date/time,  w. ns resolution */
@@ -235,6 +238,10 @@ extern int lstat(const char *path, struct stat *buf);
   #endif
 #endif
 
+/* Proprietary function for making sure that readdir() & lstat() return consistent file types */
+/* The dirent.d_type field is the same as bits 15:12 of the stat.st_mode field */
+unsigned char MlxAttrAndTag2Type(WCHAR *pwszDir, WCHAR *pwszName, DWORD dwAttr, DWORD dwTag);
+
 /* Proprietary function for recovering dirent infos without calling stat */
 /* Note: MSDOS has a single stat version, and its dirent2stat implementation is in dirent.c */
 #ifdef _USE_32BIT_TIME_T
@@ -267,6 +274,104 @@ extern void Timespec2Filetime(const struct timespec *pTS, FILETIME *pFT);
 
 /* Proprietary function for generating a string with the local file time, in the ISO 8601 date/time format */
 extern char *Filetime2String(const FILETIME *pFT, char *pBuf, size_t nBufSize);
+
+/* Proprietary function returning a File ID, unique locally on a server. */
+typedef struct { /* Equivalent to the FILE_ID_INFO structure defined in winbase.h */
+  /* https://docs.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_info */
+  DWORD dwIDVol0;		/* Volume ID (low DWORD for NTFS and ReFS) */
+  DWORD dwIDVol1;		/* Volume ID (high DWORD for ReFS, 0 for NTFS) */
+  DWORD dwIDFil0;		/* File ID (low DWORD for NTFS and ReFS) */
+  DWORD dwIDFil1;		/* File ID (high DWORD for NTFS and ReFS) */
+  DWORD dwIDFil2;		/* File ID (DWORD #3 for ReFS, 0 for NTFS) */
+  DWORD dwIDFil3;		/* File ID (DWORD #4 for ReFS, 0 for NTFS) */
+} FILE_ID;
+
+extern BOOL bMlxStatSetInode; /* Control whether lstat() & stat() do set st_dev & st_ino, which slows it noticeably */
+extern BOOL MlxGetFileAttributesAndIDW(const WCHAR *pwszName, WIN32_FILE_ATTRIBUTE_DATA *pAttr, FILE_ID *pFID, BOOL bLink);
+extern BOOL MlxGetFileAttributesAndID(const char *pszName, WIN32_FILE_ATTRIBUTE_DATA *pAttr, FILE_ID *pFID, BOOL bLink);
+#define MlxGetFileIDW(pwszName, pFID) MlxGetFileAttributesAndIDW(pwszName, NULL, pFID, 0) /* If it's a link, get the ID of the target file or dir */
+#define MlxGetLinkIDW(pwszName, pFID) MlxGetFileAttributesAndIDW(pwszName, NULL, pFID, 1) /* If it's a link, get the ID of the link itself */
+#define MlxGetFileID(pszName, pFID) MlxGetFileAttributesAndID(pszName, NULL, pFID, 0) /* If it's a link, get the ID of the target file or dir */
+#define MlxGetLinkID(pszName, pFID) MlxGetFileAttributesAndID(pszName, NULL, pFID, 1) /* If it's a link, get the ID of the link itself */
+
+/* ------------------------------------------------------------------------- */
+/* Proprietary routines for calling WIN32 low-level file information APIs on systems that support them */
+
+/* The GetFileInformationByHandle() function is available in Windows 95, and all later versions of Windows */
+/* https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle */
+/* No need for a front-end routine for this one */
+
+/* --------------------- GetFileInformationByHandleEx() -------------------- */
+/* The GetFileInformationByHandleEx() function is only available in Windows XP and later */
+/* https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex */
+typedef BOOL (WINAPI *PGETFILEINFORMATIONBYHANDLEEX)(HANDLE hFile, int nInfoClass, LPVOID lpOutBuf, DWORD dwBufLen);
+extern PGETFILEINFORMATIONBYHANDLEEX pGetFileInformationByHandleEx; /* Pointer to GetFileInformationByHandleEx(), if available */
+BOOL HasGetFileInformationByHandleEx(void); /* Tell if GetFileInformationByHandleEx() is available, and init pGetFileInformationByHandleEx if not done already */
+/* New file information classes were introduced in each new version of Windows */
+/* Define information classes introduced in Vista, and thus missing in Win95 or WinXP SDKs */
+#if _WIN32_WINNT < 0x0600
+#define FileNameInfo 2 /* Defined in WinBase.h, starting in the Vista SDK */
+typedef struct _FILE_NAME_INFO {
+    DWORD FileNameLength;
+    WCHAR FileName[1];
+} FILE_NAME_INFO, *PFILE_NAME_INFO;
+
+#define FileStreamInfo 7 /* Defined in WinBase.h, starting in the Vista SDK */
+typedef struct _FILE_STREAM_INFO {
+  DWORD         NextEntryOffset;
+  DWORD         StreamNameLength;
+  LARGE_INTEGER StreamSize;
+  LARGE_INTEGER StreamAllocationSize;
+  WCHAR         StreamName[1];
+} FILE_STREAM_INFO, *PFILE_STREAM_INFO;
+
+#define FileAttributeTagInfo 9 /* Defined in WinBase.h, starting in the Vista SDK */
+typedef struct _FILE_ATTRIBUTE_TAG_INFO {
+  DWORD FileAttributes;
+  DWORD ReparseTag;
+} FILE_ATTRIBUTE_TAG_INFO, *PFILE_ATTRIBUTE_TAG_INFO;
+#endif /*  _WIN32_WINNT < 0x0600 */
+
+/* Define information classes introduced in Windows 8, and thus missing in Win95 to Win7 SDKs */
+#if _WIN32_WINNT < 0x0602
+#define FileIdInfo 18 /* Defined in WinBase.h, starting in the Windows 8 SDK */
+typedef struct _FILE_ID_128 {                               
+    BYTE  Identifier[16];                                   
+} FILE_ID_128, *PFILE_ID_128;                               
+typedef struct _FILE_ID_INFO {
+    ULONGLONG VolumeSerialNumber;
+    FILE_ID_128 FileId;
+} FILE_ID_INFO, *PFILE_ID_INFO;
+#endif /*  _WIN32_WINNT < 0x0602 */
+
+/* ----------------------- GetFileInformationByName() ---------------------- */
+/* The GetFileInformationByName() function is only available in Windows XP and later */
+/* https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyname */
+typedef BOOL (WINAPI *PGETFILEINFORMATIONBYNAME)(LPWSTR, int, LPVOID, DWORD);
+extern PGETFILEINFORMATIONBYNAME pGetFileInformationByName; /* Pointer to GetFileInformationByName(), if available */
+/* New file information classes were introduced in each new version of Windows */
+
+/* Define information classes introduced in Windows 11, and thus missing in Win95 to Win10 SDKs */
+#if !defined(NTDDI_VERSION) || !defined(NTDDI_WIN11_ZN) || NTDDI_VERSION < NTDDI_WIN11_ZN
+#define FileStatBasicByNameInfo 3
+typedef struct _FILE_STAT_BASIC_INFORMATION {
+    LARGE_INTEGER FileId;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER AllocationSize;
+    LARGE_INTEGER EndOfFile;
+    DWORD FileAttributes;
+    DWORD ReparseTag;
+    DWORD NumberOfLinks;
+    DWORD DeviceType;
+    DWORD DeviceCharacteristics;
+    DWORD Reserved;
+    LARGE_INTEGER VolumeSerialNumber;
+    FILE_ID_128 FileId128;
+} FILE_STAT_BASIC_INFORMATION, *PFILE_STAT_BASIC_INFORMATION;
+#endif
 
 #endif /* defined(_WIN32) */
 
@@ -355,6 +460,7 @@ extern char *Filetime2String(const FILETIME *pFT, char *pBuf, size_t nBufSize);
 #define S_TYPEISTMO(pStat) 0	/* Test for a typed memory object */
 
 /* Structure stat standard st_mode flags */
+/* Warning: These constants are octal, with Unix-compatible values */
 #define S_ISUID    04000    /* Set UID bit                                     */
 #define S_ISGID    02000    /* Set-group-ID bit                                */
 #define S_ISVTX    01000    /* Sticky bit                                      */
@@ -383,17 +489,18 @@ extern char *Filetime2String(const FILETIME *pFT, char *pBuf, size_t nBufSize);
 /* Structure stat extensions for DOS/Windows file attributes */
 #define S_IFVOLID  0xF000   /* Volume ID pseudo-file, defined in FAT root dir */
 #define S_ISVOLID(m) S_ISTYPE(m, S_IFVOLID) /* Test for a FAT volume ID */
-#define S_HIDDEN		01	/* Reuse permissions bit not used in DOS/Windows */
-#define S_ARCHIVE		02	/* Reuse permissions bit not used in DOS/Windows */
-#define S_SYSTEM		04	/* Reuse permissions bit not used in DOS/Windows */
-#define S_COMPRESSED		010	/* Reuse permissions bit not used in DOS/Windows */
-#define S_ENCRYPTED		020	/* Reuse permissions bit not used in DOS/Windows */
-#define S_NOT_CONTENT_INDEXED	040	/* Reuse permissions bit not used in DOS/Windows */
+/* Warning: These constants are octal, for comparison with Unix-compatible values above */
+#define S_HIDDEN		01	/* Reuse others permissions bit, not used in DOS/Windows */
+#define S_ARCHIVE		02	/* Reuse others permissions bit, not used in DOS/Windows */
+#define S_SYSTEM		04	/* Reuse others permissions bit, not used in DOS/Windows */
+#define S_COMPRESSED		010	/* Reuse group permissions bit, not used in DOS/Windows */
+#define S_ENCRYPTED		020	/* Reuse group permissions bit, not used in DOS/Windows */
+#define S_NOT_CONTENT_INDEXED	040	/* Reuse group permissions bit, not used in DOS/Windows */
 #define S_OFFLINE		01000	/* Reuse sticky bit, not used in DOS/Windows */
 #define S_SPARSE_FILE		02000	/* Reuse GID bit, not used in DOS/Windows */
 #define S_MOUNT_POINT		04000	/* Reuse UID bit, not used in DOS/Windows */
-/* #define S_TEMPORARY			/* Reuse UID bit, not used in DOS/Windows */
-/* #define S_VIRTUAL			/* No bit left for this one */
+/* #define S_TEMPORARY			// No bit left for this one */
+/* #define S_VIRTUAL			// No bit left for this one */
 
 #if defined(_MSDOS)
 #define _mkdirx(path, mode) _mkdir(path)

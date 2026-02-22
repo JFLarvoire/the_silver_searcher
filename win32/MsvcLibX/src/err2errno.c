@@ -12,6 +12,8 @@
 *                   Removed a few useless special cases, and added EZERO case.*
 *                   Make sure the global errno is _not_ changed by this funct.*
 *    2020-08-28 JFL Remove the CR characters in the error message.            *
+*    2026-02-19 JFL Extracted new routine MlxGetWin32ErrorMessage() out of    *
+*		    the debug code of Win32ErrorToErrno().		      *
 *                                                                             *
 *         © Copyright 2016 Hewlett Packard Enterprise Development LP          *
 * Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 *
@@ -52,6 +54,8 @@
 |    2014-03-05 JFL Added the default call to _get_errno_from_oserr().        |
 |    2015-12-07 JFL Use the new error conversion routine name in the UCRT.    |
 |    2017-10-31 JFL Added case ERROR_FILENAME_EXCED_RANGE.		      |
+|    2021-12-26 JFL Added case ERROR_CANT_RESOLVE_FILENAME.		      |
+|    2026-02-02 JFL Added case ERROR_CANT_ACCESS_FILE.			      |
 *									      *
 \*---------------------------------------------------------------------------*/
 
@@ -96,16 +100,21 @@ static int RemoveChars(char *pszText, char cToRemove) {
   }
 }
 
+char *MlxGetWin32ErrorMessage(DWORD dwError) {
+  char *lpMsgBuf;
+  FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+		NULL, dwError, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+		(LPTSTR)&lpMsgBuf, 0, NULL);
+  /* Messages end with CR LF. But the printf(LF) generates an extra CR, which confuses some software. */
+  if (lpMsgBuf) RemoveChars(lpMsgBuf, '\x0D'); /* So remove the CR characters */
+  return lpMsgBuf;
+}
+
 int Win32ErrorToErrno() {
   DWORD dwError = GetLastError();
 
   DEBUG_CODE({
-    LPVOID lpMsgBuf;
-    FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-		  NULL, dwError, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		  (LPTSTR)&lpMsgBuf, 0, NULL);
-    /* Messages end with CR LF. But the printf(LF) generates an extra CR, which confuses some software. */
-    if (lpMsgBuf) RemoveChars(lpMsgBuf, '\x0D'); /* So remove the CR characters */
+    LPVOID lpMsgBuf = MlxGetWin32ErrorMessage(dwError);
     DEBUG_PRINTF(("// Win32 error %d (0x%X): %s", dwError, dwError, lpMsgBuf ? lpMsgBuf : "Unknown\n"));
     LocalFree( lpMsgBuf );
   });
@@ -137,6 +146,11 @@ int Win32ErrorToErrno() {
       return EILSEQ;
     case ERROR_FILENAME_EXCED_RANGE:
       return ENAMETOOLONG;
+    case ERROR_CANT_RESOLVE_FILENAME:
+      return ELOOP; /* Most likely because there were more than 16 consecutive links. Broken links return ERROR_FILE_NOT_FOUND. */
+    case ERROR_CANT_ACCESS_FILE: /* Happens when doing a stat on AppExecLinks or WciLinks */
+      /* return ENXIO; // No such device or address */
+      return EAGAIN; /* Resource temporarily unavailable */
     default: {
       int errno0, errno1;
       errno0 = errno; /* Preserve the initial errno */

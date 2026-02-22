@@ -30,6 +30,11 @@
 *                   Added a third argument to ConvertBuf() etc; Renamed them  *
 *                   with an Ex suffix; And added macros with the old name     *
 *                   without the extra three arguments.                        *
+*    2021-11-25 JFL Added WideToNewMultiByteString() & similar routines.      *
+*    2025-08-04 JFL Disabled debug output by default, to avoid lots of        *
+*                   useless output when debugging other routines.             *
+*    2025-12-22 JFL Fixed fputsM, which output garbage for empty "" input.    *
+*    2026-01-28 JFL Fixed Unicode plane 1+ characters output on the console.  *
 *                                                                             *
 *         © Copyright 2016 Hewlett Packard Enterprise Development LP          *
 * Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 *
@@ -61,6 +66,14 @@
 #include <io.h>         /* For _setmode() */
 #include <fcntl.h>      /* For I/O modes */
 #include "unistd.h"	/* For isatty() */
+
+#if 0
+  /* Enable only in case of work on this routine, else this generates
+     lots of useless information in other debug output. */
+  #define DEBUG_CONVERT_CODE(code) XDEBUG_CODE_IF_ON(code)
+#else
+  #define DEBUG_CONVERT_CODE(code)
+#endif
 
 /*---------------------------------------------------------------------------*\
 *                                                                             *
@@ -104,7 +117,7 @@ int ConvertBufEx(const char *pFromBuf, size_t nFromBufSize, UINT cpFrom, char *p
   int nWBufMax;			/* Number of UTF-16 characters that fit in the UTF-16 buffer */
 
   /* DO NOT INSERT DEBUG_PRINTF ETC CALLS, AS THIS FUNCTION IS INDIRECTLY INVOKED BY DEBUG_PRINTF */
-  XDEBUG_CODE_IF_ON(
+  DEBUG_CONVERT_CODE(
     _cprintf("ConvertBufEx(*%p, %ld, %u, *%p, %ld, %u, 0x%x, *%p, *%p)\n", \
    	     pFromBuf, (long)nFromBufSize, cpFrom, pToBuf, (long)nToBufSize, cpTo, dwFlags, lpDefaultChar, lpUsedDef);
   )
@@ -176,7 +189,7 @@ bad_unicode_char:
       break;
     }
     default:	/* Anything else is a single byte or multibyte encoding, so let Windows convert it */
-      XDEBUG_CODE_IF_ON(
+      DEBUG_CONVERT_CODE(
 	_cprintf("MultiByteToWideChar(%u, 0x%x, *%p, %d, *%p, %lu)\n", \
 		 cpFrom, 0, pFromBuf, (int)nFromBufSize, pWBuf, (long)nWBufMax);
       )
@@ -227,7 +240,7 @@ bad_unicode_char:
     }
     default: {	/* Anything else is a single byte or multibyte encoding, so let Windows convert it */
       LPBOOL lpUsedDef2 = ((cpTo == CP_UTF7) || (cpTo == CP_UTF8)) ? NULL : &bUsedDef2;
-      XDEBUG_CODE_IF_ON(
+      DEBUG_CONVERT_CODE(
 	_cprintf("WideCharToMultiByte(%u, 0x%x, *%p, %d, *%p, %d, *%p, *%p)\n", \
 		 cpTo, dwFlags, pWBuf, nWide, pToBuf, (int)nToBufSize, lpDefaultChar, lpUsedDef2);
       )
@@ -258,7 +271,7 @@ int ConvertStringEx(char *buf, size_t nBufSize, UINT cpFrom, UINT cpTo,
   int n;
 
   /* DO NOT INSERT DEBUG_PRINTF ETC CALLS, AS THIS FUNCTION IS INDIRECTLY INVOKED BY DEBUG_PRINTF */
-  XDEBUG_CODE_IF_ON(
+  DEBUG_CONVERT_CODE(
     _cprintf("ConvertStringEx(*%p, %ld, %u, %u, 0x%x, *%p, *%p)\n", \
    	     buf, (long)nBufSize, cpFrom, cpTo, dwFlags, lpDefaultChar, lpUsedDef);
   )
@@ -294,7 +307,7 @@ char *DupAndConvertEx(const char *string, UINT cpFrom, UINT cpTo,
   char *pBuf;
 
   /* DO NOT INSERT DEBUG_PRINTF ETC CALLS, AS THIS FUNCTION IS INDIRECTLY INVOKED BY DEBUG_PRINTF */
-  XDEBUG_CODE_IF_ON(
+  DEBUG_CONVERT_CODE(
     _cprintf("DupAndConvertEx(*%p, %u, %u, 0x%x, *%p, *%p)\n", \
    	     string, cpFrom, cpTo, dwFlags, lpDefaultChar, lpUsedDef);
   )
@@ -351,7 +364,7 @@ WCHAR *MultiByteToNewWideStringEx(UINT cp, DWORD dwFlags, const char *string) {
   WCHAR *pwBuf = (WCHAR *)malloc(n * sizeof(WCHAR));
   WCHAR *pwBuf2;
   if (!pwBuf) return NULL;
-  n = MultiByteToWideChar(cp, dwFlags, string, (int)(l+1), pwBuf, n);
+  n = MultiByteToWideChar(cp, dwFlags, string, l+1, pwBuf, n);
   if (!n) {
     errno = Win32ErrorToErrno();
     free(pwBuf);
@@ -360,6 +373,25 @@ WCHAR *MultiByteToNewWideStringEx(UINT cp, DWORD dwFlags, const char *string) {
   pwBuf2 = realloc(pwBuf, n * sizeof(WCHAR));
   if (pwBuf2) pwBuf = pwBuf2;
   return pwBuf;
+}
+
+/* Allocate a new multi-byte string converted from the input wide string */
+/* In case of failure, sets errno */
+char *WideToNewMultiByteStringEx(UINT cp, DWORD dwFlags, const WCHAR *wstring) {
+  int l = lstrlenW(wstring);
+  int n = (4*l)+1;	/* Worst case for the number of chars needed */
+  char *pBuf = (char *)malloc(n);
+  char *pBuf2;
+  if (!pBuf) return NULL;
+  n = WideCharToMultiByte(cp, dwFlags, wstring,	l+1, pBuf, n, NULL, NULL);
+  if (!n) {
+    errno = Win32ErrorToErrno();
+    free(pBuf);
+    return NULL;
+  }
+  pBuf2 = realloc(pBuf, n);
+  if (pBuf2) pBuf = pBuf2;
+  return pBuf;
 }
 
 /*---------------------------------------------------------------------------*\
@@ -618,7 +650,10 @@ int isTranslatedFile(int iFile, UINT cp, UINT *pcpOut) {
 #undef fputc
 #undef fwrite
 
-#if _MSC_VER < 1500 /* Up to VS 8/2005, fputws() is broken. It outputs just the 1st character. */
+#if 0	/* This workaround has the same bug as MSVC's own fputws() in later versions:
+	   It cannot display UTF-16 plane 1 characters */ 
+	   
+#if _MSC_VER < 1500 /* Up to VS 8/2005, fputws() is broken. It outputs just the first character. */
 /* Actually it's _setmode() that does not support _O_WTEXT, but the effect is the same */
 int fputwsW(const wchar_t *pws, FILE *f) {
   wint_t wi;
@@ -628,6 +663,35 @@ int fputwsW(const wchar_t *pws, FILE *f) {
   }
   return 0;
 }
+#endif
+
+#else	/* Updated workaround, for all MSVC versions up to VS 2026 at least */
+
+#undef fputws	/* Make sure fputws() refers to Microsoft's own, not our fputwsW() */
+
+int fputwsW(const wchar_t *pws, FILE *f) {
+  int iRet = 0;
+  int iFile = fileno(f);
+  if (isConsole(iFile)) {	/* Writing to the console */
+    /* Supplementary Plane characters are displayed correctly by Windows Terminal only
+       if both elements of a surrogate pair are printed by a single WriteConsoleW call. */ 
+    HANDLE hConsole = (HANDLE)_get_osfhandle(iFile);
+    BOOL bDone;
+    fflush(f); /* Make sure any output cached earlier makes it to the console first */
+    bDone = WriteConsoleW(hConsole, pws, lstrlenW(pws), NULL, NULL);
+    if (!bDone) {
+      iRet = EOF;
+      errno = Win32ErrorToErrno();
+    }
+  } else {			/* Writing to a file */
+    /* Simply use fputws, which writes UTF-16 surrogate pairs successfully to files */
+    iRet = fputws(pws, f);
+  }
+  return iRet;
+}
+
+#define fputws fputwsW	/* Use this workaround further down */
+
 #endif
 
 #define IS_ASCII(c) ((c&0x80) == 0)
@@ -676,6 +740,7 @@ int fputcM(int c, FILE *f, UINT cp) {
     nInBuf = 2;
   }
 
+  /* nInBuf cannot be 0, so MultiByteToWideChar() will not misbehave due to 0-length input */
   if (isWideFile(iFile)) {
     /* Output a wide character to guaranty every Unicode character is displayed */
     n = MultiByteToWideChar(cp, 0, buf, (int)nInBuf, wBuf, sizeof(wBuf)/sizeof(WCHAR));
@@ -736,14 +801,17 @@ int fputsM(const char *buf, FILE *f, UINT cp) {
   char *pBuf = NULL;
   UINT cpOut;
   int iFile = fileno(f);
+  size_t l = lstrlen(buf);
 
   if (iFile >= FOPEN_MAX) {
     DEBUG_PRINTF(("ERROR: File index too high: fputs(..., %d)\n", iFile));
   }
 
-  if (isWideFile(iFile)) {
+  if (!l) {
+    /* Nothing to do. Also prevents random output when MultiByteToWideChar() has 0-length input */
+    iRet = 0;
+  } else if (isWideFile(iFile)) {
     /* Output a wide string to guaranty every Unicode character is displayed */
-    size_t l = strlen(buf);
     int n;
     WCHAR *pwBuf = (WCHAR *)malloc(l * 4);
     if (!pwBuf) return -1;

@@ -112,14 +112,20 @@
 :#   2020-01-06 JFL Output a more helpful message if can't find nmake.exe.    *
 :#   2020-01-29 JFL In the end, count warnings, and open the log if any found.*
 :#   2020-12-16 JFL Added optional LINK_OUDIR to link OUTDIR to another one.  *
+:#   2021-02-03 JFL Renamed variable STINCLUDE as NMINCLUDE.                  *
+:#   2021-02-04 JFL Do not count _CRT_SECURE_NO_WARNINGS macros as warnings.  *
 :#   2021-06-03 JFL Avoid counting constants like NO_WARNINGS as warnings.    *
+:#   2023-01-03 JFL Define MAKERELDIR with the relative path from the start.  *
+:#   2024-01-05 JFL Delete the previous log file in all cases.                *
+:#                  Don't rename the log file after the goal when -l is used. *
+:#   2025-09-24 JFL Make sure -c CONFNAME is inherited by sub-make.bat instcs.*
 :#                                                                            *
 :#      © Copyright 2016-2020 Hewlett Packard Enterprise Development LP       *
 :# Licensed under the Apache 2.0 license  www.apache.org/licenses/LICENSE-2.0 *
 :#*****************************************************************************
 
 setlocal EnableExtensions EnableDelayedExpansion
-set "VERSION=2021-06-03"
+set "VERSION=2025-09-24"
 set "SCRIPT=%~nx0"				&:# Script name
 set "SPATH=%~dp0" & set "SPATH=!SPATH:~0,-1!"	&:# Script path, without the trailing \
 set  "ARG0=%~f0"				&:# Script full pathname
@@ -1294,7 +1300,7 @@ echo Usage: %SCRIPT% [options] [nmake_options] [macrodefs] [targets] ...
 echo.
 echo Options:
 echo   -?^|-h         This help
-echo   -c CONFIG     Use conf. from config.CONFIG.bat. Default: config.%COMPUTERNAME%.bat
+echo   -c CONFIG     Use conf. from config.CONFIG.bat. Default: config.%CONFNAME%.bat
 echo   -C DIRECTORY  Change the current directory before doing anything
 echo   -cde          Clean Debug Environment variables, if the script was interrupted
 echo   -d            Run this script in debug mode
@@ -1471,7 +1477,7 @@ exit /b %ERROR%
 :# Locate the make file in well known dirs and in the INCLUDE path
 :LocateMakefile
 if exist "%~1" set "MAKEFILE=%~1" & exit /b 0
-if exist "%STINCLUDE%\%~1" set "MAKEFILE=%STINCLUDE%\%~1" & exit /b 0
+if exist "%NMINCLUDE%\%~1" set "MAKEFILE=%NMINCLUDE%\%~1" & exit /b 0
 for %%p in ("%INCLUDE:;=" "%") do if exist "%%p\%~1" set "MAKEFILE=%%p\%~1" & exit /b 0
 set "MAKEFILE=%~1" & exit /b 1
 
@@ -1480,12 +1486,17 @@ set "MAKEFILE=%~1" & exit /b 1
 :main
 set "BMAKE="%~f0""	&:# The full pathname to this make.bat script, with quotes
 set "BCONF=%BMAKE:make.bat=configure.bat%" &:# The full pathname of configure.bat
-set "CONFIG.BAT=config.%COMPUTERNAME%.bat" &:# The output file for this make.bat script
+if not defined CONFNAME set "CONFNAME=%COMPUTERNAME%"
+set "CONFIG.BAT=config.%CONFNAME%.bat" &:# The output file for this make.bat script
 set "POST_MAKE_ACTIONS=" &:# A series of commands to run after the final endlocal after make
 if not defined MAKEDEPTH ( :# This is the initial make.bat instance. Show the final result.
   set "MAKEDEPTH=0"
+  set "MAKEDIR0=!CD!"
+  set "MAKERELDIR=."
 ) else ( :# This is a sub-instance. Do not show the intermediate result.
   set /a "MAKEDEPTH+=1"
+  set "MAKERELDIR=!CD:%MAKEDIR0%\=!"
+  if not defined MAKERELDIR set "MAKERELDIR=."
 )
 :# Make command line parsing analysis results
 set "MAKEFILE="
@@ -1497,17 +1508,17 @@ set "LIGHTMAKE="	&:# 1=Simply run nmake and exit. 0=Capture and process its outp
 set "DOLOG=1"		&:# By default, do create a log file
 set ">DEBUGOUT=>&2"	&:# Send debug output to stderr, so that it does not interfere with subroutines output capture
 
-if not defined STINCLUDE ( :# Try getting the copy in the master environment
-  for /f "tokens=3" %%v in ('reg query "HKCU\Environment" /v STINCLUDE 2^>NUL') do set "STINCLUDE=%%v"
+if not defined NMINCLUDE ( :# Try getting the copy in the master environment
+  for /f "tokens=3" %%v in ('reg query "HKCU\Environment" /v NMINCLUDE 2^>NUL') do set "NMINCLUDE=%%v"
 )
-set "INCLUDE=%STINCLUDE%" &:# Ensure common make files are found by nmake in the %STINCLUDE% directory
+set "INCLUDE=%NMINCLUDE%" &:# Ensure common make files are found by nmake in the %NMINCLUDE% directory
 
 :next_arg
 if not defined ARGS set "ARG=" & goto go
 %POPARG%
 if "!ARG!"=="-?" goto help
 if "!ARG!"=="/?" goto help
-if "!ARG!"=="-c" %POPARG% & set "CONFIG.BAT=config.!ARG!.bat" & goto next_arg
+if "!ARG!"=="-c" %POPARG% & set "CONFNAME=!ARG!" & set "CONFIG.BAT=config.!ARG!.bat" & goto next_arg
 if "!ARG!"=="-C" %POPARG% & call :MakeInDir %* & exit /b
 if "!ARG!"=="-cde" goto :CleanDebugEnvironment
 if "!ARG!"=="-d" call :Debug.On & call :Verbose.On & goto next_arg
@@ -1528,7 +1539,7 @@ if "!ARG!"=="-X" call :Exec.Off & goto next_arg
 :# Special targets that need special handling
 if "!ARG!"=="cleanenv" goto :CleanBuildEnvironment &:# This routine exits directly
 if not "LIGHTMAKE"=="0" (
-  for %%t in (help clean mostlyclean distclean module_name) do (
+  for %%t in (help clean mostlyclean veryclean distclean module_name) do (
     if "!ARG!"=="%%t" (
       call :GetConfig
       call :nmake !ARG! & exit /b
@@ -1581,9 +1592,10 @@ if defined LINK_OUTDIR ( :# Restore the initial MD_OUTDIR saved above
 if "%DOLOG%"=="1" if not defined LOGFILE ( :# Create one, in OUTDIR if defined
   set "LOGFILE=make.log"
   set "LOGFILE=%OUTDIR\%!LOGFILE!"
-  if exist "!LOGFILE!" del "!LOGFILE!"
   call :Debug.SetLog "!LOGFILE!"
+  set "IS_TEMP_LOG=1" &rem :# This will be renamed below based on the main goal
 ) &:# else keep using the parent instance log file
+if exist "!LOGFILE!" del "!LOGFILE!"
 
 :# Start logging by recording the make command.
 %LOG% make %*
@@ -1622,7 +1634,7 @@ if "!ARG:~0,1!"=="/" ( :# This is a switch
     %ECHO.D% :# nmake goal !"ARG"!
     set "LASTGOAL=!ARG!" &:# Record the last goal, without quotes
     set MAKEGOALS=!MAKEGOALS! !"ARG"!
-    if not defined MAKEFILE if exist "%STINCLUDE%\All.mak" (
+    if not defined MAKEFILE if exist "%NMINCLUDE%\All.mak" (
       set "SUBDIR="
       %ECHO.D% :# Looking for SUBDIR in goal !"ARG"!
       :# If the goal includes a path, then extract the last component of that path.
@@ -1630,8 +1642,8 @@ if "!ARG:~0,1!"=="/" ( :# This is a switch
       	set "B=%%~b" &:# But this path ends with a trailing \, which we remove below
         for %%c in ("!B:~0,-1!") do set "SUBDIR=%%~nxc"
       )
-      if defined SUBDIR if exist "%STINCLUDE%\!SUBDIR!.mak" (
-      	set "MAKEFILE=%STINCLUDE%\!SUBDIR!.mak"
+      if defined SUBDIR if exist "%NMINCLUDE%\!SUBDIR!.mak" (
+      	set "MAKEFILE=%NMINCLUDE%\!SUBDIR!.mak"
 	%ECHO.D% :# Setting MAKEFILE !MAKEFILE! after goal !"ARG"!
       )
       if not defined MAKEFILE (
@@ -1655,7 +1667,7 @@ if "!MAKEARGS:~0,1!"==" " set "MAKEARGS=!MAKEARGS:~1!"
 goto next_ra
 :done_ra
 if not defined MAKEGOALS set "NEEDMAKEFILE=1" &:# We do need a make file to build a default target 
-%ECHOVARS.D% CD MAKEFILE NMAKEFLAGS MAKEDEFS MAKEGOALS LASTGOAL NEEDMAKEFILE INCLUDE STINCLUDE PID MAKEORIGIN %MAKEORIGIN%_CC OUTDIR
+%ECHOVARS.D% CD MAKEFILE NMAKEFLAGS MAKEDEFS MAKEGOALS LASTGOAL NEEDMAKEFILE INCLUDE NMINCLUDE PID MAKEORIGIN %MAKEORIGIN%_CC OUTDIR
 
 :# Set a makefile if needed, based on the target subdirectory
 :# :# Select a make file if none was specified
@@ -1735,16 +1747,18 @@ if %MAKEDEPTH%==0 if defined LOGFILE ( :# If this is the top-level instance of m
   :# If there's still no goal, use the current directory name.
   if not defined GOAL set "GOAL=!CD0!"
   %ECHOVARS.D% GOAL LOGDIR
-  :# Rename %LOGFILE% after the %GOAL%, and display the build log.
-  set LOGFILE2=!GOAL!.log
-  if not defined LOGDIR if defined OUTDIR set "LOGDIR=%OUTDIR%"
-  if defined LOGDIR set "LOGFILE2=!LOGDIR!\!LOGFILE2!"
-  if not "!LOGFILE2!"=="!LOGFILE!" (
-    if exist "!LOGFILE2!" del "!LOGFILE2!"
-    move "!LOGFILE!" "!LOGFILE2!" >nul
-    call :Debug.SetLog "!LOGFILE2!"
+  if defined IS_TEMP_LOG (
+    :# Rename %LOGFILE% after the %GOAL%, and display the build log.
+    set LOGFILE2=!GOAL!.log
+    if not defined LOGDIR if defined OUTDIR set "LOGDIR=%OUTDIR%"
+    if defined LOGDIR set "LOGFILE2=!LOGDIR!\!LOGFILE2!"
+    if not "!LOGFILE2!"=="!LOGFILE!" (
+      if exist "!LOGFILE2!" del "!LOGFILE2!"
+      move "!LOGFILE!" "!LOGFILE2!" >nul
+      call :Debug.SetLog "!LOGFILE2!"
+    )
+    %ECHOVARS.D% LOGFILE
   )
-  %ECHOVARS.D% LOGFILE
 )
 
 if %MAKEDEPTH%==0 ( :# If this is the top-level instance of make.bat, show the final result
