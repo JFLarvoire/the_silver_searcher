@@ -159,7 +159,7 @@ size_t ag_min(size_t a, size_t b) {
 
 void generate_hash(const char *find, const size_t f_len, uint8_t *h_table, const int case_sensitive) {
     int i;
-    for (i = f_len - sizeof(uint16_t); i >= 0; i--) {
+    for (i = (int)(f_len - sizeof(uint16_t)); i >= 0; i--) {
         // Add all 2^sizeof(uint16_t) combinations of capital letters to the hash table
         int caps_set;
         for (caps_set = 0; caps_set < (1 << sizeof(uint16_t)); caps_set++) {
@@ -175,7 +175,7 @@ void generate_hash(const char *find, const size_t f_len, uint8_t *h_table, const
             // Find next free cell
             for (h = word.as_word % H_SIZE; h_table[h]; h = (h + 1) % H_SIZE)
                 ;
-            h_table[h] = i + 1;
+            h_table[h] = (uint8_t)(i + 1);
             // Don't add capital letters if case sensitive
             if (case_sensitive)
                 break;
@@ -248,7 +248,7 @@ size_t invert_matches(const char *buf, const size_t buf_len, match_t matches[], 
     size_t inverted_match_start = 0;
     size_t last_line_end = 0;
     int in_inverted_match = TRUE;
-    match_t next_match;
+    match_t next_match = {0};
 
     log_debug("Inverting %u matches.", matches_len);
 
@@ -575,7 +575,7 @@ char *fgetln(FILE *fp, size_t *lenp) {
                 return NULL;
             }
             buf = newbuf;
-            used = nsize;
+            used = (int)nsize;
         }
         buf[len++] = (char)c;
         if (c == '\n') {
