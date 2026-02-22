@@ -12,6 +12,11 @@
 #include <libgen.h>	/* Used for expanding wild cards */
 #include <dirent.h>	/* Used for expanding wild cards */
 #include <fnmatch.h>	/* Used for expanding wild cards */
+/* Specific addition for MsvcLibX 2026 version */
+#if defined(HAS_MSVCLIBX) && !defined(HAS_SYSLIB)
+#define DICT_DEFINE_PROCS // Define in one of the modules.
+#include "dict.h"	      // Include in every module.     
+#endif // defined(HAS_MSVCLIBX) && !defined(HAS_SYSLIB)
 #endif
 
 #include "config.h"
