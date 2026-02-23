@@ -45,7 +45,7 @@ https://www.visualstudio.com/vs/cplusplus/
 When installing it, select the workload "Desktop Development with C++",
 and the options "C++/CLI support" and "Standard Library modules".
 
-The ag build has been tested successfully with Visual Studio versions 2013, 2015, and 2017.  
+The ag build has been tested successfully with Visual Studio versions 2013 to 2026.  
 Older versions of Visual Studio will NOT to work, due to lack of C99 support.  
 Note that all libraries build successfully with Visual Studio 2005. So converting ag/src/*.c to be C89-compliant
 would allow adding support for older versions of Windows, and even for MS-DOS!
@@ -71,6 +71,9 @@ You may want to add the absolute path to win32\include in your PATH. This allows
 for rebuilding one component without rebuilding the rest.  
 For example, once the libraries have been built, you may want to run make.bat in the src directory,
 to save time when just rebuilding modified versions of ag.exe.
+
+These scripts, and associated make files, are copied from the [NMaker](https://github.com/JFLarvoire/NMaker) repository.
+Eventually, this last repository will be included here as a git module.
 
 
 ## MsvcLibX - MSVC Library Extensions
