@@ -223,13 +223,14 @@
 :#   2025-09-23 JFL Added option -sdk for selecting a given Windows Kit.      *
 :#   2025-09-26 JFL Correctly detect and configure VS 8's Platform SDK.       *
 :#                  Fixed recursion issues.                                   *
+:#   2026-02-24 JFL Adapted the STINCLUDE detection for Ag 2.2.6 w/o modules. *
 :#                                                                            *
 :#      © Copyright 2016-2020 Hewlett Packard Enterprise Development LP       *
 :# Licensed under the Apache 2.0 license  www.apache.org/licenses/LICENSE-2.0 *
 :#*****************************************************************************
 
 setlocal EnableExtensions EnableDelayedExpansion
-set "VERSION=2025-09-26"
+set "VERSION=2026-02-24"
 set "SCRIPT=%~nx0"				&:# Script name
 set "SPATH=%~dp0" & set "SPATH=!SPATH:~0,-1!"	&:# Script path, without the trailing \
 set  "ARG0=%~f0"				&:# Script full pathname
@@ -2567,7 +2568,7 @@ call :findArm	&:# Find ARM development tools
 call :findArm64	&:# Find ARM64 development tools
 
 :# Manage a list of known SDKs, that we'll include further down in the build variables
-set "SDK_LIST=NMINCLUDE" &:# List of variable names, defining the SDK install directories.
+set "SDK_LIST=NMINCLUDE STINCLUDE" &:# List of variable names, defining the SDK install directories.
 :# Macro, for use in configure.*.bat scripts, to easily add variables to %SDK_LIST%
 set USE_SDK=%MACRO% ( %\n%
   for %%a in (%!%MACRO.ARGS%!%) do ( %\n%
@@ -2648,7 +2649,8 @@ set "SDK.NMINCLUDE.DIR=INCLUDE"
 set "SDK.NMINCLUDE.FILE=debugm.h"
 
 set "SDK.STINCLUDE.NAME=SysToolsLib global C include files"
-set "SDK.STINCLUDE.FILE=stversion.h"
+set "SDK.STINCLUDE.DIR=INCLUDE"
+set "SDK.STINCLUDE.FILE=dict.h"
 
 set "SDK.BIOSLIB.NAME=BIOS Library"
 set "SDK.BIOSLIB.FILE=clibdef.h"
@@ -2741,6 +2743,7 @@ if defined SDK_LIST for %%v in (%SDK_LIST%) do (
     if defined %%v call :lappend PATH_LIST "!%%v!"
     if "%%v"=="NMINCLUDE" call :lappend PATH_LIST "%SPATH%" &rem :# configure.bat normally is in the NMINCLUDE dir
     if defined MY_SDKS for %%s in (%MY_SDKS%) do call :lappend PATH_LIST "%%~s\!DIR!"
+    for %%x in ("%SPATH%\..\!DIR!") do if exist %%x call :lappend PATH_LIST "%%~fx"
     call :lappend PATH_LIST ..\!DIR!
     call :lappend PATH_LIST "%PF64%\!DIR!"
     if not "%PF32%"=="%PF64%" call :lappend PATH_LIST "%PF32%\!DIR!"
