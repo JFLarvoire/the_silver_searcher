@@ -21,6 +21,7 @@
 #    2017-11-10 JFL Fully automate support for Ver<=2.09, 2.10beta, >=2.10RC. #
 #    2017-11-12 JFL Added recursive rules for building all LIBs and DLLs.     #
 #    2017-11-13 JFL Moved the conditional directives to pthread.mak.          #
+#    2026-03-03 JFL Added a CLEAN_OUTDIRS directive.			      #
 #									      #
 ###############################################################################
 
@@ -235,6 +236,8 @@ VS=$(DLL_VERD)			# Version suffix to append to alias names in the common dir
 DS=
 VS=$(DLL_VER)
 !ENDIF
+
+CLEAN_OUTDIRS=$(OUTDIR)\VC$(DLL_VER)_DLL $(OUTDIR)\VC$(DLL_VER)_LIB $(OUTDIR)\VCE$(DLL_VER)_DLL $(OUTDIR)\VCE$(DLL_VER)_LIB $(OUTDIR)\VSE$(DLL_VER)_DLL $(OUTDIR)\VSE$(DLL_VER)_LIB
 
 VC-dll VC_dll VC.dll VCdll Cdll VC pthreadVC$(DLL_VER).dll:
     $(SUBMAKE) "OUTDIR=$(OUTDIR)\VC$(DLL_VER)_DLL"  EH=C   TYPE=DLL pthread.dll
