@@ -223,7 +223,8 @@
 :#   2025-09-23 JFL Added option -sdk for selecting a given Windows Kit.      *
 :#   2025-09-26 JFL Correctly detect and configure VS 8's Platform SDK.       *
 :#                  Fixed recursion issues.                                   *
-:#   2026-02-24 JFL Adapted the STINCLUDE detection for Ag 2.2.6 w/o modules. *
+:#   2026-02-24 JFL Adapted the STINCLUDE detection for projects that still   *
+:#                  include NMaker and MsvcLibX copies, & not as git modules. *
 :#                                                                            *
 :#      © Copyright 2016-2020 Hewlett Packard Enterprise Development LP       *
 :# Licensed under the Apache 2.0 license  www.apache.org/licenses/LICENSE-2.0 *
