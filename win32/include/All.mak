@@ -163,6 +163,10 @@
 #    		    Added variable TEST_OS to define the OS list for testing. #
 #    2024-10-11 JFL Bug fixes & performance improvements.                     #
 #    2025-09-24 JFL The batch config file name is config.$(CONFNAME).bat.     #
+#    2026-02-28 JFL Moved CLEAN_DIRS execution before the $(OUTDIR) cleanup,  #
+#		    to increase the chances of being able to remove $(OUTDIR).#
+#    2026-03-02 JFL Make clean now displays the relative paths it cleans.     #
+#    2026-03-03 JFL Added the CLEAN_OUTDIRS optional variable.		      #
 #    		    							      #
 #       © Copyright 2016-2017 Hewlett Packard Enterprise Development LP       #
 # Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 #
@@ -872,25 +876,45 @@ list_programs: NUL
 	exit /b
 <<
 
+!IF !DEFINED(CLEANDIR)
+CLEANDIR=.
+!ENDIF
+
+SUBMAKEALL=$(MAKE) $(MAKEFLAGS_) /F "$(MAKEPATH)\All.mak" MAKEDEPTH=$(MAKEDEPTH1)
+SUCCEED=(call,) # cmd.exe internal command that always returns error level 0
+
 # Erase all output files
 clean mostlyclean distclean: NUL
 !IF DEFINED(DIRS)
     rem # Delete files in DIRS=$(DIRS)
-    for %d in ($(DIRS)) do @($(MSG) Cleaning %d & cd "$(MAKEDIR)\%d" && $(SUBMAKE) $(MAKEDEFS) $@)
-    $(MSG) Cleaning .
+    for %%d in ($(DIRS)) do @if exist %%d pushd %%d & $(SUBMAKEALL) "CLEANDIR=$(CLEANDIR)\%%d" $(MAKEDEFS) $@ & popd
+!ENDIF
+!IF DEFINED(DIRS) || $(MAKEDEPTH) > 0
+    if not "$(CLEANDIR)"=="" $(MSG) Cleaning $(CLEANDIR:.\=)
 !ENDIF
     rem # Delete files built for supported OS types
-    $(IFBIOS)  $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\BIOS.mak"  $(MAKEDEFS) clean
-    $(IFLODOS) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\LODOS.mak" $(MAKEDEFS) clean
-    $(IFDOS)   $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\DOS.mak"   $(MAKEDEFS) clean
-    $(IFWIN16) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\WIN16.mak" $(MAKEDEFS) clean
-    $(IFWIN95) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\WIN95.mak" $(MAKEDEFS) clean
-    $(IFWIN32) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\WIN32.mak" $(MAKEDEFS) clean
-    $(IFIA64)  $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\IA64.mak"  $(MAKEDEFS) clean
-    $(IFWIN64) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\WIN64.mak" $(MAKEDEFS) clean
-    $(IFARM)   $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\ARM.mak"   $(MAKEDEFS) clean
-    $(IFARM64) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\ARM64.mak" $(MAKEDEFS) clean
+    $(IFBIOS)  $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\BIOS.mak"  $(MAKEDEFS) $@
+    $(IFLODOS) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\LODOS.mak" $(MAKEDEFS) $@
+    $(IFDOS)   $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\DOS.mak"   $(MAKEDEFS) $@
+    $(IFWIN16) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\WIN16.mak" $(MAKEDEFS) $@
+    $(IFWIN95) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\WIN95.mak" $(MAKEDEFS) $@
+    $(IFWIN32) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\WIN32.mak" $(MAKEDEFS) $@
+    $(IFIA64)  $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\IA64.mak"  $(MAKEDEFS) $@
+    $(IFWIN64) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\WIN64.mak" $(MAKEDEFS) $@
+    $(IFARM)   $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\ARM.mak"   $(MAKEDEFS) $@
+    $(IFARM64) $(MAKE) $(MAKEFLAGS_) /f "$(MAKEPATH)\ARM64.mak" $(MAKEDEFS) $@
     rem # Delete the output directories
+!IF DEFINED(CLEAN_OUTDIRS) # Then clean each alternate output directory, and remove it if empty
+# Do this before clearing $(OUTDIR), to increase the chances of being able to remove $(OUTDIR).
+# Clear variable CLEANDIR, to avoid displaying a progress message for each one
+    -for %%d in ($(CLEAN_OUTDIRS)) do @if exist %%d @$(SUBMAKEALL) "CLEANDIR=" "OUTDIR=%%d" $(MAKEDEFS) $@ & rd %%d 2>NUL & $(SUCCEED)
+!ENDIF
+!IF DEFINED(CLEAN_DIRS) # Then clean each directory in this list, and remove it if empty
+# Do this before clearing $(OUTDIR), to increase the chances of being able to remove $(OUTDIR).
+# Clear variable CLEANDIR, to avoid displaying a progress message for each one
+# TODO: Find a way to tell the child make below to skip recursive make calls above for each OS type, as these make sense only for OUTDIRs.
+    -for %%d in ($(CLEAN_DIRS)) do @if exist %%d @pushd %%d & $(SUBMAKEALL) "CLEANDIR=" $(MAKEDEFS) $@ & popd & rd %%d 2>NUL & $(SUCCEED)
+!ENDIF
 !IF DEFINED(OUTDIR) && "$(OUTDIR)" != "" && "$(OUTDIR)" != "." && "$(OUTDIR)" != ".."
     -if "$@"=="distclean" rd /S /Q $(OUTDIR) >NUL 2>&1		&:# Delete OUTDIR, including Unix builds there
 !ENDIF
@@ -910,13 +934,10 @@ clean mostlyclean distclean: NUL
 # Workaround: Use a for /d loop to detect subdirectories, and remove the junction only if there are none.
     -if exist $(OUTDIR) ((for /d %d in ($(OUTDIR)\*) do @(call)) && rd $(OUTDIR) >NUL 2>&1) &:# Delete OUTDIR if it's empty
 !ENDIF
-    -del /Q *.bak	>NUL 2>&1
-    -del /Q *~		>NUL 2>&1
     -del /Q *.log	>NUL 2>&1
+    -if "$@"=="distclean" del /Q *.bak	>NUL 2>&1
+    -if "$@"=="distclean" del /Q *~	>NUL 2>&1
     -if "$@"=="distclean" del /Q config.*.bat >NUL 2>&1
-!IF DEFINED(CLEAN_DIRS) # Then clean each directory, and remove it if empty
-    -for %%d in ($(CLEAN_DIRS)) do @pushd %%d & $(SUBMAKE) $(MAKEDEFS) $@ & popd & rd %%d 2>NUL
-!ENDIF
 !IF DEFINED(CLEAN_FILES) # Then clean each file
     -for %%d in ($(CLEAN_FILES)) do @if exist %%d del %%d >NUL 2>&1
 !ENDIF
