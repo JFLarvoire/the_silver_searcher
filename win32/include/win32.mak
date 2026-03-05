@@ -156,6 +156,10 @@
 #    2024-10-14 JFL Consistent generation of DOS & WIN32 config.h files.      #
 #    2024-10-19 JFL Fixed a bug in RemBOM.bat which caused a hang in W7VM.    #
 #    2025-09-26 JFL The batch config file name is config.$(CONFNAME).bat.     #
+#    2026-03-01 JFL In the $(CONFIG_H): rule, handle the case of projects     #
+#		    that have their own config.h file.			      #
+#    2026-03-04 JFL Do not define _DLL in the .mak.lib inference rule.	      #
+#		    Define the mostlyclean and distclean targets.	      #
 #		    							      #
 #      © Copyright 2016-2018 Hewlett Packard Enterprise Development LP        #
 # Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 #
@@ -505,7 +509,7 @@ SUBMAKE=$(MAKE) $(MAKEFLAGS_) /F "$(MAKEFILE)" # Recursive call to this make fil
 
 .mak.lib:
     @echo Applying $(T).mak inference rule (PROGRAM undefined) .mak.lib:
-    $(SUBMAKE) "PROGRAM=$(*F)" "_DLL=" $(MAKEDEFS) lib.hl dirs $(B)\$(@F)
+    $(SUBMAKE) "PROGRAM=$(*F)" $(MAKEDEFS) lib.hl dirs $(B)\$(@F)
 
 .mak.dll:
     @echo Applying $(T).mak inference rule (PROGRAM undefined) .mak.dll:
@@ -914,6 +918,12 @@ $(CONFIG_H): $(I) "$(THIS_MAKEFILE)" config.$(CONFNAME).bat
 #define UNUSED_ARG(arg_name) (void)arg_name /* Avoid an unused argument warning. No code generated. */
 <<KEEP
     (for %%v in ($(HAS_SDK_LIST)) do @echo #define %%v 1) >>$@
+    :# Handle the case of projects that have their own config.h file
+    if exist $(S)\config.h ( \
+      echo.& \
+      echo /* Include the project's own config.h */& \
+      echo #include ^<$(S2)\config.h^> \
+    ) >>$@
     echo>$(CONFIG_I) #include ^<config.h^>
 
 $(REMOVE_UTF8_BOM): "$(THIS_MAKEFILE)"
@@ -1074,17 +1084,19 @@ convert_C_sources: files $(S2) NUL
     $(CONV_SOURCES)
 
 # Erase all output files
-clean: NUL
+clean mostlyclean: NUL
     -rd /S /Q $(R)	>NUL 2>&1
     -del /Q *.pdb	>NUL 2>&1
     -del /Q *.ncb	>NUL 2>&1
     -del /Q *.suo	>NUL 2>&1
-    -del /Q *.bak	>NUL 2>&1
-    -del /Q *~		>NUL 2>&1
 !IF DEFINED(PROGRAM) && DEFINED(LIBDIR) && EXIST("$(LIBDIR)")
     -del "$(LIBDIR)\$(PROGRAM)$(LSX0).lib" "$(LIBDIR)\$(PROGRAM)$(LSX0)d.lib" >NUL 2>&1
     -rd $(LIBDIR)	>NUL 2>&1 &:# Remove the lib directory if it's empty
 !ENDIF
+
+distclean: clean
+    -del /Q *.bak	>NUL 2>&1
+    -del /Q *~		>NUL 2>&1
 
 # Help message describing the targets
 help: NUL
