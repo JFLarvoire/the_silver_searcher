@@ -6,11 +6,20 @@ Usage:
 
 Open a cmd.exe command window; Go to the_silver_searcher root directory; Then run:
 
-    win32\configure.bat
-    win32\make.bat
+    win32\include\configure.bat
+    make.bat
 
 This builds the necessary libraries in win32, then ag.exe.  
 The 32 and 64 bits versions of ag.exe will be stored in bin\WIN32\ and bin\WIN64\ respectively.
+
+To do another build, run make again:
+
+    make.bat
+
+But if any update is done to your C compiler, or libraries, it is necessary to first run configure.bat again.
+This time, it can simply be done using the proxy script copied the first time into the project root:
+
+    configure.bat
 
 
 ## Ag.exe features
@@ -27,7 +36,8 @@ The ag.exe programs built with these libraries have the following features:
 - Output non-ASCII characters correctly in any console code page.  
   (Provided that the console font has bitmaps for them. See the table below.)  
   (But if the output is piped to a file or another program, it'll be converted to the current console code page,
-  and unsupported characters will be lost. This is a limitation of the Windows console, not of ag.exe.)
+  and unsupported characters will be lost. This is a limitation of the Windows console, not of ag.exe.
+  => To be sure to never lose any character when piping results to another app, use codepage 65001 = UTF-8.)
 
 Console font          | Character families it can display
 --------------------- | ---------------------------------------------------------------------
