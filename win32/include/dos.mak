@@ -176,6 +176,7 @@
 #    2024-10-14 JFL Consistent generation of DOS & WIN32 config.h files.      #
 #    2024-10-19 JFL Fixed a bug in RemBOM.bat which caused a hang in W7VM.    #
 #    2025-09-26 JFL The batch config file name is config.$(CONFNAME).bat.     #
+#    2026-03-04 JFL Define the mostlyclean and distclean targets.	      #
 #		    							      #
 #      © Copyright 2016-2018 Hewlett Packard Enterprise Development LP        #
 # Licensed under the Apache 2.0 license - www.apache.org/licenses/LICENSE-2.0 #
@@ -1537,14 +1538,16 @@ convert_C_sources: files $(S2) NUL
     $(CONV_SOURCES)
 
 # Erase all output files
-clean: NUL
+clean mostlyclean: NUL
     -rd /S /Q $(R)	>NUL 2>&1
-    -del /Q *.bak	>NUL 2>&1
-    -del /Q *~		>NUL 2>&1
 !IF DEFINED(PROGRAM) && DEFINED(LIBDIR) && EXIST("$(LIBDIR)")
     -for %m in (t s c d l h) do del "$(LIBDIR)\$(PROGRAM)$(LSX0)%m.lib" "$(LIBDIR)\$(PROGRAM)$(LSX0)%md.lib" >NUL 2>&1
     -rd $(LIBDIR)	>NUL 2>&1 &:# Remove the lib directory if it's empty
 !ENDIF
+
+distclean: clean
+    -del /Q *.bak	>NUL 2>&1
+    -del /Q *~		>NUL 2>&1
 
 # Help message describing the targets
 help: NUL
