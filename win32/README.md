@@ -168,7 +168,7 @@ zLib - File compression library
 
 Home page: http://www.zlib.net/
 
-Using zlib 1.2.11, which is the latest version as of June 2020.
+Using zlib 1.3.2, which is the latest version as of march 2026.
 
 #### Files added
 Name               | Description
@@ -178,10 +178,7 @@ Files.mak          | Define input and output files.
 zlib.mak           | Zlib-specific make rules.
 
 #### Files modified
-Name               | Description
--------------------|-------------------------------------------------------------------
-gzguts.h           | Line 47: Changed `#ifdef WINAPI_FAMILY` to `#if defined(WINAPI_FAMILY) && !defined(HAS_MSVCLIBX)`
-zutil.h            | Line 170: Changed to: `#if (defined(_MSC_VER) && (_MSC_VER > 600)) && !defined __INTERIX && !defined HAS_MSVCLIBX`
+None
 
 
 Debug versions
