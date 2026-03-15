@@ -115,8 +115,8 @@ pcre - Perl-Compatible Regular Expressions library
 
 Home page: http://www.pcre.org/
 
-Using pcre 8.44, which is the latest in the PCRE 1 series as of June 2020.  
-Do not use pcre2, which has different APIs.
+Using pcre 8.45, which is the latest in the PCRE 1 series.  
+Do not use pcre2 for now, as it has has different APIs.
 
 #### Files added
 Name               | Description
