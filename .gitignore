@@ -73,3 +73,7 @@ win32/winget/*.png
 *#
 *.0??
 *.bak
+# Various types of diff and patch files
+*.dif*
+*.orig
+*.rej
