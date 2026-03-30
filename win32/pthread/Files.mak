@@ -22,10 +22,12 @@
 #    2017-11-12 JFL Added recursive rules for building all LIBs and DLLs.     #
 #    2017-11-13 JFL Moved the conditional directives to pthread.mak.          #
 #    2026-03-03 JFL Added a CLEAN_OUTDIRS directive.			      #
+#    2026-03-27 JFL Added comments, and added a few phony targets.            #
 #									      #
 ###############################################################################
 
 # SOURCES=List of source files to compile and include in the pthread library
+# It is dynamically defined in pthread.mak, based on one of the following lists.
 
 # Using this all-features-included file allows for a simple and quick compilation,
 # at the cost of wasted space.
@@ -207,18 +209,29 @@ SOURCES_210_BETA =	\
     sem_wait.c				\
     w32_CancelableWait.c		\
 
+# There's no need for a SOURCES_300 of later variable:
+# Pthread version 3 maintains its own list of sources in file common.mk, in the PTHREAD_SRCS variable.
+# pthreads.mak then dynamically sets SOURCES based on PTHREAD_SRCS, or on one of the above lists.
+
 #-----------------------------------------------------------------------------#
-# Rules that should go in an NMakefile file.
-# We put them here instead, because pthread4w already has a file called NMakefile, for uwin.
-# (Which forced us to disable the use of NMakefile in configure.pthread.bat.)
+#                                Phony targets                                #
+#-----------------------------------------------------------------------------#
+
+# Leave these targets and the following rules here, not in pthreads.mak, because they're
+# needed also in All.mak, and that file includes Files.mak, but not pthreads.mak.
 
 # List of all targets that must be built
-ALL=DLLs
+ALL=DLLs LIBs
 
 # Other useful phony targets
-DLLs: VC-dll VCE-dll VSE-dll
+DLL dll: VC-dll
 
-LIBs: VC-lib VCE-lib VSE-lib
+DLLs dlls: VC-dll VCE-dll VSE-dll
+
+LIB lib: VC-lib
+
+LIBs libs: VC-lib VCE-lib VSE-lib
+
 
 DLL_VER	= 2$(EXTRAVERSION)
 DLL_VERD= $(DLL_VER)d
@@ -237,17 +250,19 @@ DS=
 VS=$(DLL_VER)
 !ENDIF
 
+#-----------------------------------------------------------------------------#
+
 CLEAN_OUTDIRS=$(OUTDIR)\VC$(DLL_VER)_DLL $(OUTDIR)\VC$(DLL_VER)_LIB $(OUTDIR)\VCE$(DLL_VER)_DLL $(OUTDIR)\VCE$(DLL_VER)_LIB $(OUTDIR)\VSE$(DLL_VER)_DLL $(OUTDIR)\VSE$(DLL_VER)_LIB
 
 VC-dll VC_dll VC.dll VCdll Cdll VC pthreadVC$(DLL_VER).dll:
-    $(SUBMAKE) "OUTDIR=$(OUTDIR)\VC$(DLL_VER)_DLL"  EH=C   TYPE=DLL pthread.dll
+    $(SUBMAKE) "OUTDIR=$(OUTDIR)\VC$(DLL_VER)_DLL" EH=C TYPE=DLL pthread.dll
     :# Then generate the legacy alias name in a common directory
     cmd /c for %%o in ($(OS)) do if not exist $(OUTDIR)\%%o\DLLs md $(OUTDIR)\%%o\DLLs
     cmd /c for %%o in ($(OS)) do copy /y $(OUTDIR)\VC$(DLL_VER)_DLL\%%o$(DS)\pthread.dll $(OUTDIR)\%%o\DLLs\pthreadVC$(VS).dll
     cmd /c for %%o in ($(OS)) do copy /y $(OUTDIR)\VC$(DLL_VER)_DLL\%%o$(DS)\pthread.lib $(OUTDIR)\%%o\DLLs\pthreadVC$(VS).lib
 
 VC-lib VC_lib VC.lib VClib Clib VC-static pthreadVC$(DLL_VER).lib:
-    $(SUBMAKE) "OUTDIR=$(OUTDIR)\VC$(DLL_VER)_LIB"  EH=C   TYPE=LIB pthread.lib
+    $(SUBMAKE) "OUTDIR=$(OUTDIR)\VC$(DLL_VER)_LIB" EH=C TYPE=LIB pthread.lib
     :# Then generate the legacy alias name in a common directory
     cmd /c for %%o in ($(OS)) do if not exist $(OUTDIR)\%%o\LIBs md $(OUTDIR)\%%o\LIBs
     cmd /c for %%o in ($(OS)) do copy /y $(OUTDIR)\VC$(DLL_VER)_LIB\%%o$(DS)\pthread.lib $(OUTDIR)\%%o\LIBs\pthreadVC$(VS).lib

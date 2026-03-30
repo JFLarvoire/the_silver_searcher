@@ -152,15 +152,17 @@ pthread.mak           | Pthread-specific make rules.
 #### Files modified
 | Name                      | Description
 |---------------------------|----------------------------------------------------------------------------------------------------------
-| \_ptw32.h                 | Line 123: Surrounded `#define HAVE_STRUCT_TIMESPEC` by `#ifndef HAVE_STRUCT_TIMESPEC` and `#endif`
-|                           | Line 151: Changed `#elif !defined(__MINGW32__)` to `#elif !defined(__MINGW32__) && !defined(HAS_MSVCLIBX)`
-| config.h                  | Line 146: Changed `#if defined(_MSC_VER) && _MSC_VER >= 1900` to `#if defined(_MSC_VER) && (_MSC_VER >= 1900 || defined(HAS_MSVCLIBX))`
+| \_ptw32.h                 | Line 124: Changed `#if _MSC_VER >= 1900` to `#if _MSC_VER >= 1900 && !defined(HAVE_STRUCT_TIMESPEC)`
+|                           | Line 162: Changed `#elif !defined(__MINGW32__)` to `#elif !defined(__MINGW32__) && !defined(HAS_MSVCLIBX)`
+| common.mk					| Added the missing ptw32_strdup.obj to STATIC_OBJS_SMALL and ptw32_strdup.c to PTHREAD_SRCS
+| config.h                  | Line 154: Changed `#if defined(_MSC_VER) && _MSC_VER >= 1900` to `#if defined(_MSC_VER) && (_MSC_VER >= 1900 || defined(HAS_MSVCLIBX))`
 | dll.c (v2.10 only)        | Line 127: Moved four `#pragma comment (linker, ...)` lines to implement.h
 | implement.h               | Line 137: Added a `#if defined(PTW32_CONFIG_MINGW) ... #endif` block with the four `#pragma comment (linker, ...)` lines from dll.c. This ensures that purely static builds link with dll.obj.
+| Nmakefile                 | pthread has its own Nmakefile file, incompatible with NMaker. Surround the initial content with `!IFNDEF NMINCLUDE ... !ENDIF`, and append ours thereafter
+| pthread.h                 | Line 207: Changed `#if [...] _MSC_VER >= 1900` to `#if [...] _MSC_VER >= 1900 && !defined(HAVE_STRUCT_TIMESPEC)`
 | ptw32_processInitialize.c | Lines 42 & 143: Added a fix for the bug that caused pthreads.lib 2.10 and 3.0 to hang in static builds.
-
-Gotcha: pthread has its own Nmakefile file, which we do not want to use.  
-Hence the special IGNORE_NMAKEFILE definition in configure.pthread.bat.
+| ptw32_throw.c				| Lines 70: Corrected `#if defined(__CLEANUP_CXX)` to `#if defined(PTW32_CLEANUP_CXX)`
+| sched.h                   | Lines 57 to 72; Added a `#if !defined(HAS_MSVCLIBX) ... #endif` block around the pid_t type redefinition.
 
 
 zLib - File compression library

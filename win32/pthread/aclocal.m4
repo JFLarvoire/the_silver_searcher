@@ -1,11 +1,11 @@
 ## aclocal.m4
 ## --------------------------------------------------------------------------
 ##
-##      Pthreads4w - POSIX Threads for Windows
+##      pthreads-win32 / pthreads4w - POSIX Threads for Windows
 ##      Copyright 1998 John E. Bossom
-##      Copyright 1999-2018, Pthreads4w contributors
+##      Copyright(C) 1999-2021 pthreads-win32 / pthreads4w contributors
 ##
-##      Homepage: https://sourceforge.net/projects/pthreads4w/
+##      Homepage: http://sources.redhat.com/pthreads-win32
 ##
 ##      The current list of contributors is contained
 ##      in the file CONTRIBUTORS included with the source
@@ -68,7 +68,7 @@ AC_LINK_IFELSE([AC_LANG_SOURCE([[
 #ifdef HAVE_ERRNO_H
 # include <errno.h>
 #endif
-int main(){ return errno; }
+int main(void){ return errno; }
 ]])],dnl
 [AC_MSG_RESULT([yes])],dnl
 [AC_DEFINE([NEED_ERRNO],[1],[Define if you do not have errno])
