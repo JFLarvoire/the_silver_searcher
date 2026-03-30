@@ -37,7 +37,12 @@ win32/pcre/pcre_chartables.c
 # Parts of the sub-projects that we don't depend on
 win32/pthread/manual/
 win32/pthread/tests/
-win32/pthread_2/
+# Older libraries for reference
+win32/MsvcLibX-*/
+win32/NMaker-*/
+win32/pcre-*/
+win32/pthread-*/
+win32/zlib-*/
 # Microsoft Visual C++ output files
 *.lib
 *.log
