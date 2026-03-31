@@ -14,10 +14,12 @@
 
 :# Declare the SDKs and libraries we need
 %BEGIN_SDK_DEFS%
-:# %USE_SDK% MSVCLIBX
+%USE_SDK% MSVCLIBX
 %END_SDK_DEFS%
 
-:# Pthread has its own uwin nmakefile, that we do not want to use
+:# Pthread has its own uwin nmakefile, that we initially ignored this way.
+:# We now have the initial content compiled out, and our own content appended.
+:# Leaving this constant definition here as an example.
 :# set "IGNORE_NMAKEFILE=1"
 
 :# Avoid trying to build pthreads for DOS, even if a DOS compiler is available.
