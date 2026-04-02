@@ -99,7 +99,8 @@ Home page: https://github.com/JFLarvoire/SysToolsLib/tree/master/C/MsvcLibX
 
 The MsvcLibX library extends Microsoft Visual C++ Standard C Libraries, adding many missing standard Unix definitions and functions.  
 It also includes support for UTF-8 command-lines, file names, input and output.  
-This ensures that Unix programs designed for use in an UTF-8 environment behave correctly in Windows' UTF16 environment, in any console code page.
+This ensures that Unix programs designed for use in an UTF-8 environment behave correctly in Windows' UTF16 environment,
+in any console code page.
 
 MsvcLibX is one component of the [System Tools Library](https://github.com/JFLarvoire/SysToolsLib).  
 
@@ -132,15 +133,18 @@ None
 When upgrading pcre, check changes in config.h.generic, and port them into config.h.MsvcLibX.  
 This typically includes the 3 version strings.
 
+Known issues:
+There's no support for non-ASCII Unicode characters in the PCRE 1 series.
+Searching for non-ASCII characters will work in some cases, but not in others.
+This will be fixed once we switch to the pcre2 library.
+
 
 pthreads - Posix Threads for Windows library
 --------------------------------------------
 
-Home page: http://sourceforge.net/projects/pthreads4w/
+Home page: https://github.com/GerHobbelt/pthread-win32
 
-Using a patched version of pthread 3.0, which is the latest available as of June 2020.
-Note that the 2.10 beta used by [KJK](https://github.com/kjk/the_silver_searcher) worked with only minimal patches for MsvcLibX compatibility,
-but the 2.10 RC, 2.10 release, and 3.0 release do not: They hang at run time. The root cause is a memory allocation issue in purely static builds of pthreads.lib
+Using a patched version of pthread-win32 3.0.3.1, which is the latest available as of march 2026.
 
 #### Files added
 Name                  | Description
@@ -163,6 +167,19 @@ pthread.mak           | Pthread-specific make rules.
 | ptw32_processInitialize.c | Lines 42 & 143: Added a fix for the bug that caused pthreads.lib 2.10 and 3.0 to hang in static builds.
 | ptw32_throw.c				| Lines 70: Corrected `#if defined(__CLEANUP_CXX)` to `#if defined(PTW32_CLEANUP_CXX)`
 | sched.h                   | Lines 57 to 72; Added a `#if !defined(HAS_MSVCLIBX) ... #endif` block around the pid_t type redefinition.
+
+Note that until 2025, we used another fork of the same library, called [pthreads4w](http://sourceforge.net/projects/pthreads4w)
+
+The latests version of pthreads4w was version 3.0.0, released in 2018.
+Note that the pthreads4w 2.10 beta used by [KJK](https://github.com/kjk/the_silver_searcher) worked with only minimal
+patches for MsvcLibX compatibility, but the 2.10 RC, 2.10 release, and 3.0 release do not: They hang at run time.
+The root cause is a memory allocation issue in purely static builds of pthreads.lib.
+
+pthread-win32 is a derivative of pthreads4w 3.0.0, with minor changes from several sources.
+The most important change is that most project-specific constants have been renamed, with a PTW32_ prefix instead of the original __ prefix.
+
+There's another slightly older variant of pthread-win32 intended for general use [there](https://github.com/WinBuilds/pthread-win32),
+but all development activity seems to be going on on the [GerHobbelt's version](https://github.com/GerHobbelt/pthread-win32).
 
 
 zLib - File compression library
