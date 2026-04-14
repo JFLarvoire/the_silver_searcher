@@ -73,7 +73,7 @@ typedef struct {
     int print_path;
     int print_all_paths;
     int print_line_numbers;
-    int print_long_lines; /* TODO: support this in print.c */
+    int print_long_lines;  /* TODO: support this in print.c */
     int passthrough;
     pcre *re;
     pcre_extra *re_extra;
@@ -87,7 +87,7 @@ typedef struct {
     int search_binary_files;
     int search_zip_files;
     int search_hidden_files;
-    int search_stream; /* true if tail -F blah | ag */
+    int search_stream;	    /* true if tail -F blah | ag */
     int stats;
     size_t stream_line_num; /* This should totally not be in here */
     int match_found;        /* This should totally not be in here */
@@ -101,6 +101,9 @@ typedef struct {
     char *pager;
     int paths_len;
     int parallel;
+#ifdef _WIN32
+    int unix;		    /* Used for for testing ag.exe in WSL */
+#endif
     int use_thread_affinity;
     int vimgrep;
     size_t width;

@@ -12,6 +12,8 @@
 #include <libgen.h>	/* Used for expanding wild cards */
 #include <dirent.h>	/* Used for expanding wild cards */
 #include <fnmatch.h>	/* Used for expanding wild cards */
+#include <io.h>		/* Used for the --unix option for testing ag.exe in WSL */
+#include <fcntl.h>	/* Used for the --unix option for testing ag.exe in WSL */
 /* Specific addition for MsvcLibX 2026 version */
 #if defined(HAS_MSVCLIBX) && !defined(HAS_SYSLIB)
 #define DICT_DEFINE_PROCS // Define in one of the modules.
@@ -305,6 +307,9 @@ void init_options(void) {
     opts.color_path = ag_strdup(color_path);
     opts.color_match = ag_strdup(color_match);
     opts.color_line_number = ag_strdup(color_line_number);
+#ifdef _WIN32
+    opts.unix = TRUE;
+#endif
     opts.use_thread_affinity = TRUE;
 }
 
@@ -482,6 +487,9 @@ void parse_options(int argc, char **argv, char **base_paths[], char **paths[]) {
         { "smart-case", no_argument, NULL, 'S' },
         { "stats", no_argument, &opts.stats, 1 },
         { "stats-only", no_argument, NULL, 0 },
+#ifdef _WIN32
+        { "unix", no_argument, &opts.unix, 1 }, // Used for for testing ag.exe in WSL
+#endif
         { "unrestricted", no_argument, NULL, 'u' },
         { "verbose", no_argument, &opts.verbose, 1 },
         { "version", no_argument, &version, 1 },
@@ -768,6 +776,23 @@ void parse_options(int argc, char **argv, char **base_paths[], char **paths[]) {
         }
     }
 
+#ifdef _WIN32
+    if (opts.unix) {
+      /* For testing the ag.exe Windows executable in WSL with cram,
+	 disable the text mode translation for both stdout and stderr */
+      int iFile, iMode;
+      for (iFile=1; iFile<=2; iFile++) { /* For stdout and stderr */
+	iMode = _setmode(iFile, _O_BINARY); /* Get the current mode */
+	if (iMode == -1) {
+	  log_err("Error getting file #%d mode", iFile);
+	} else {
+	  iMode = _setmode(iFile, (iMode & ~_O_TEXT) | _O_BINARY);
+	  if (iMode == -1) log_err("Error setting file #%d mode", iFile);
+	}
+      }
+    }
+#endif
+
     if (opts.casing == CASE_DEFAULT) {
         opts.casing = CASE_SMART;
     }
@@ -1030,7 +1055,7 @@ bad_unicode_char:
 	}
 	*pOut = '\0';
 	opts.query_len = (int)(pOut - opts.query); // strlen(opts.query);
-	log_debug("Updated Query: \"%s\"", opts.query);
+	log_debug("Updated query: \"%s\"", opts.query);
     }
     if (opts.verbose) printf("Searching for %s \"%s\"\n",
                              opts.literal ? "literal string" : "regular expression",
