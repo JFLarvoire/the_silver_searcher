@@ -308,7 +308,7 @@ void init_options(void) {
     opts.color_match = ag_strdup(color_match);
     opts.color_line_number = ag_strdup(color_line_number);
 #ifdef _WIN32
-    opts.unix = TRUE;
+    opts.unix = FALSE;
 #endif
     opts.use_thread_affinity = TRUE;
 }
