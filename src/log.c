@@ -70,7 +70,8 @@ void vplog(const unsigned int level, const char *fmt, va_list args) {
             break;
     }
 
-#ifdef _WIN32 /* Convert paths back to a Windows format */
+#ifdef _WIN32 /* Convert paths back to a Windows format */ && 0 /*
+		 Actually don't, because when debugging, we want to know exactly what's executed */
     char *msg;
     vasprintf(&msg, fmt, args);
     char *pc;
