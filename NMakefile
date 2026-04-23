@@ -14,6 +14,8 @@
 #		    zip files, for use by Chocolatey, etc.		      #
 #    2021-11-14 JFL Fixed the hash generation for the latest winget version.  #
 #    2026-04-03 JFL Avoid two duplicate targets warnings for win32 & src.     #
+#    2026-04-20 JFL Make release now adds the NEWS file to every zip file.    #
+#    2026-04-23 JFL Make release now adds MsgBox.exe, if present, to ag_setup.#
 #		    							      #
 ###############################################################################
 
@@ -103,12 +105,15 @@ release:
 	
 	:# Add the doc files
 	cd ..
-	$(MSG) Adding README
+	$(MSG) Adding README.txt
 	type README.md | FIND "" /V > README.txt	&:# Converts LF to CRLF
 	call :AddToZips README.txt
-	$(MSG) Adding LICENSE
+	$(MSG) Adding LICENSE.txt
 	type LICENSE | FIND "" /V > LICENSE.txt		&:# Converts LF to CRLF
 	call :AddToZips LICENSE.txt
+	$(MSG) Adding NEWS.txt
+	type win32\NEWS.md | FIND "" /V > NEWS.txt
+	call :AddToZips NEWS.txt
 
 	$(MSG) ... done
 	
@@ -123,6 +128,7 @@ release:
 	  $(HEADLINE) Building !EXE! ...
 	  pushd win32\winget
 	  call :AddTo7Z setup.bat
+	  if exist MsgBox.exe call :AddTo7Z MsgBox.exe
 	  copy /b /y "%LZMA%\bin\7zS2con.sfx" + "!7Z!" "!EXE!"
 	  popd
 	  
@@ -162,10 +168,12 @@ release:
 	    cd bin\%%d
 	    !7ZIP! -- a "!ZIP!" ag.exe
 	    cd ..\..
-	    $(MSG) Adding README
+	    $(MSG) Adding README.txt
 	    !7ZIP! -- a "!ZIP!" README.txt
-	    $(MSG) Adding LICENSE
+	    $(MSG) Adding LICENSE.txt
 	    !7ZIP! -- a "!ZIP!" LICENSE.txt
+	    $(MSG) Adding NEWS.txt
+	    !7ZIP! -- a "!ZIP!" NEWS.txt
 	    $(MSG) ... done
 	  )
 	)
