@@ -7,7 +7,8 @@
 :#                                                                            #
 :#  Properties 	    jEdit local buffer properties: :encoding=utf-8:tabSize=8: #
 :#                                                                            #
-:#  Notes 	                                                              #
+:#  Notes 	    Optionally uses SysToolsLib's MsgBox.exe for displaying   #
+:#                  a message box with a final status message.                #
 :#                                                                            #
 :#  Authors     JFL "Jean-François Larvoire" <jf.larvoire@free.fr>            #
 :#                                                                            #
@@ -26,11 +27,13 @@
 :#                  read the error message from within ag_setup.exe.          #
 :#   2021-11-14 JFL Added option -y.                                          #
 :#                  Fixed the registry update from within ag_setup.exe.       #
+:#   2026-04-20 JFL Added support for ARM and ARM64 systems.                  #
+:#   2026-04-23 JFL Added a final message box summarizing the result.         #
 :#                                                                            #
 :##############################################################################
 
 setlocal EnableExtensions DisableDelayedExpansion &:# Make sure ! characters are preserved
-set "VERSION=2021-11-14"
+set "VERSION=2026-04-23"
 set "SCRIPT=%~nx0"		&:# Script name
 set "SNAME=%~n0"		&:# Script name, without its extension
 set "SPATH=%~dp0"		&:# Script path
@@ -327,7 +330,7 @@ if exist %1 (
 	  )
 	)
 	rem Scan component version strings
-	for %%s in ("MSVCLIBX MsvcLibX" "PCRE PCRE" "PTHREADS pthreads4w" "ZLIB zlib") do (
+	for %%s in ("MSVCLIBX MsvcLibX" "PCRE PCRE" "PTHREADS pthreads4w" "PTHREADS pthread-win32" "ZLIB zlib") do (
 	  for /f "tokens=1,2" %%p in (%%s) do (
 	    if not defined %%p_VER (
 	      set "%%p_VER=!TOKEN:%%q =!"
@@ -407,6 +410,7 @@ if defined MSVCLIBX_VER (
     ) else (
       %COMMENT%   Upgrading it with our new version
       %EXEC% copy /y "!OS_VER!\ag.exe" %1
+      if not errorlevel 1 set "DONE=upgraded"
     )
   ) else ( rem :# If this happens, this is a bug
     %LOG% Warning: Could not recognize its OS type. Leaving it unchanged.
@@ -428,7 +432,8 @@ set "DESTDIR=!%~2!"
 call :CondQuote DESTDIR
 if not exist !DESTDIR! %EXEC% md !DESTDIR!
 %EXEC% copy /y !SOURCE! !DESTDIR!
-endlocal & set "FOUND_%~1=%DESTDIR%" & %RETURN%
+if not errorlevel 1 set "DONE=installed"
+endlocal & set "FOUND_%~1=%DESTDIR%" & set "DONE=%DONE%" & %RETURN%
 
 :#----------------------------------------------------------------------------#
 
@@ -488,8 +493,18 @@ exit /b
 :Main
 set "LOGFILE=%TEMP%\ag_setup.log"
 
+:# Find the system's processor architeture
+:# Gotcha: When run in 7zip's self-extractor, this is run in a 32-bits version of cmd.exe, even if the OS is a 64-bits OS
+set "PROC=%PROCESSOR_ARCHITEW6432%" &:# This will be empty when run in a normal 64-bits cmd.exe
+if not defined PROC set "PROC=%PROCESSOR_ARCHITECTURE%"
+
 set "SRCDIR[x86]=WIN32"
 set "SRCDIR[AMD64]=WIN64"
+set "SRCDIRS=WIN32 WIN64"
+if not defined SRCDIR[%PROC%] (
+  set "SRCDIR[%PROC%]=%PROC%"
+  set "SRCDIRS=%SRCDIRS% %PROC%"
+)
 
 set "UNINSTALL_KEY=HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\The Silver Searcher"
 set "INSTALLED_FILES="  &:# List of files installed or updated by this script
@@ -505,6 +520,11 @@ set "SILENT=0"
 :# TODO: Detect the actual parent, and only pause if it's really ag_setup.exe.
 set "PAUSE="
 if not "!SPATH!"=="!SPATH:%TEMP%=!" set "PAUSE=pause"
+
+:# Prepare the final status message
+set "MSGBOX=rem"
+if exist %SPATH%\MsgBox.exe set ^"MSGBOX="%SPATH%\MsgBox.exe""
+set "DONE=setup"  &:# Operation done. A verb = setup|installed|upgraded
 
 :# Process command-line arguments
 goto :get_arg
@@ -568,8 +588,9 @@ for %%p in (MSVCLIBX PCRE PTHREADS ZLIB) do (
 %COMMENT% Installing ag.exe version %VERSIONS%
 
 :# Scan the PATH for previous installations to upgrade
-set "FOUND_WIN32="	&:# Directory where a WIN32 instance was found
-set "FOUND_WIN64="	&:# Directory where a WIN64 instance was found
+for %%a in (%SRCDIRS%) do (
+  set "FOUND_%%a="	&rem Directory where a WIN32, etc, instance was found
+)
 for /f "delims=" %%p in ('"echo.%%PATH:;=&echo.%%"') do (
   for %%a in ("%%~p\ag.exe") do if exist %%a (
     %COMMENT% Found %%~a
@@ -577,11 +598,6 @@ for /f "delims=" %%p in ('"echo.%%PATH:;=&echo.%%"') do (
     call :FileSet.append INSTALLED_FILES %%a
   )
 )
-
-:# Find the system's processor architeture
-:# Gotcha: When run in 7zip's self-extractor, this is run in a 32-bits version of cmd.exe, even if the OS is a 64-bits OS
-set "PROC=%PROCESSOR_ARCHITEW6432%" &:# This will be empty when run in a normal 64-bits cmd.exe
-if not defined PROC set "PROC=%PROCESSOR_ARCHITECTURE%"
 
 :# Update specific versions in !bindir_%PROCESSOR_ARCHITECTURE%!, if defined
 set "PROCS=%PROC%"
@@ -664,5 +680,18 @@ if errorlevel 1 (
   %RETURN% 1
 )
 
-%COMMENT% The Silver Searcher was installed successfully
+%COMMENT% The Silver Searcher was %DONE% successfully
+
+:# Some users complained that there was no time for reading where ag.exe was
+:# installed. Since Winget requires that the setup be non-blocking, let's
+:# display a message box summarizing the setup done.
+if "%SILENT%"=="0" (
+  set "LIST="
+  for %%f in (%INSTALLED_FILES%) do set "LIST=!LIST!!LF!%%~f"
+  :# Double backslashes, as msgbox.exe interprets them on its command line.
+  set "MSG=The Silver Searcher was %DONE% successfully.!LIST:\=\\!"
+  if not "%DONE%"=="setup" set "MSG=!MSG!!LF!Please ignore the warning, if any, about 7-Zip not being installed successfully."
+  %MSGBOX% "!MSG!"
+)
+
 %RETURN% 0
