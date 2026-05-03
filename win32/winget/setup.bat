@@ -29,11 +29,14 @@
 :#                  Fixed the registry update from within ag_setup.exe.       #
 :#   2026-04-20 JFL Added support for ARM and ARM64 systems.                  #
 :#   2026-04-23 JFL Added a final message box summarizing the result.         #
+:#   2026-05-02 JFL Removed the dependency on wmic.exe, which is not always   #
+:#                  installed anymore.                                        #
+:#   2026-05-03 JFL Correctly detect the ARM builds.                          #
 :#                                                                            #
 :##############################################################################
 
 setlocal EnableExtensions DisableDelayedExpansion &:# Make sure ! characters are preserved
-set "VERSION=2026-04-23"
+set "VERSION=2026-05-03"
 set "SCRIPT=%~nx0"		&:# Script name
 set "SNAME=%~n0"		&:# Script name, without its extension
 set "SPATH=%~dp0"		&:# Script path
@@ -181,12 +184,40 @@ exit /b
 :#----------------------------------------------------------------------------#
 
 :# Get the current date/time
-:# Implementation based on wmic. Not available in early XP versions?
+:# Locale-independant version, using the date format stored in the registry
 :Now
-setlocal EnableExtensions
-for /f %%i in ('WMIC OS GET LocalDateTime /value') do for /f "tokens=2 delims==" %%j in ("%%i") do set "dt=%%j"
-endlocal & set "YEAR=%dt:~,4%" & set "MONTH=%dt:~4,2%" & set "DAY=%dt:~6,2%" & set "HOUR=%dt:~8,2%" & set "MINUTE=%dt:~10,2%" & set "SECOND=%dt:~12,2%" & set "MS=%dt:~15,3%"
-exit /b
+setlocal EnableExtensions EnableDelayedExpansion
+if not defined SDFTOKS ( :# Avoid calling reg.exe every time to regenerate SDFTOKS
+  :# First get the short date format from the Control Panel data in the registry
+  for /f "tokens=3" %%a in ('reg query "HKCU\Control Panel\International" /v sShortDate 2^>NUL ^| findstr "REG_SZ"') do set "SDFTOKS=%%a"
+  :# Now simplify this (ex: "yyyy/MM/dd") to a "YEAR MONTH DAY" format
+  for %%a in ("yyyy=y" "yy=y" "y=YEAR" "MMM=M" "MM=M" "M=MONTH" "dd=d" "d=DAY" "/=-" ".=-" "-= ") do set "SDFTOKS=!SDFTOKS:%%~a!"
+  :# From the actual order, generate the token parsing instructions
+  set "%%=%%" &:# Define a % variable that will generate a % _after_ the initial %LoopVariable parsing phase
+  for /f "tokens=1,2,3" %%t in ("!SDFTOKS!") do set "SDFTOKS=set %%t=!%%!a&set %%u=!%%!b&set %%v=!%%!c"
+)
+:# Then get the current date and time. (Try minimizing the risk that they get off by 1 day around midnight!)
+set "D=%DATE%" & set "T=%TIME%"
+:# Remove the day-of-week that appears in some languages (US English, Chinese...)
+for /f %%d in ('for %%a in ^(%D%^) do @^(echo %%a ^| findstr /r [0-9]^)') do set "D=%%d"
+:# Extract the year/month/day components, using the token indexes set in %SDFTOKS%
+for /f "tokens=1,2,3 delims=/-." %%a in ("%D%") do (%SDFTOKS%)
+:# Make sure the century is specified, and the month and day have 2 digits.
+set "YEAR=20!YEAR!"  & set "YEAR=!YEAR:~-4!"
+set "MONTH=0!MONTH!" & set "MONTH=!MONTH:~-2!"
+set "DAY=0!DAY!"     & set "DAY=!DAY:~-2!"
+:# Remove the leading space that appears for time in some cases. (Spanish...)
+set "T=%T: =%"
+:# Split seconds and milliseconds
+for /f "tokens=1,2 delims=,." %%a in ("%T%") do (set "T=%%a" & set "MS=%%b")
+:# Split hours, minutes and seconds. Make sure they all have 2 digits.
+for /f "tokens=1,2,3 delims=:" %%a in ("%T%") do (
+  set "HOUR=0%%a"   & set "HOUR=!HOUR:~-2!"
+  set "MINUTE=0%%b" & set "MINUTE=!MINUTE:~-2!"
+  set "SECOND=0%%c" & set "SECOND=!SECOND:~-2!"
+  set "MS=!MS!000"  & set "MS=!MS:~0,3!"
+)
+endlocal & set "YEAR=%YEAR%" & set "MONTH=%MONTH%" & set "DAY=%DAY%" & set "HOUR=%HOUR%" & set "MINUTE=%MINUTE%" & set "SECOND=%SECOND%" & set "MS=%MS%" & goto :eof
 
 :#----------------------------------------------------------------------------#
 
@@ -315,42 +346,48 @@ endlocal & set "%1=%LIST%" & exit /b
 :# Manage version strings
 
 :GetAgVersion %1=[path\]ag.exe
+%ENTER%
 for %%c in (AG MSVCLIBX PCRE PTHREADS ZLIB OS) do set "%%c_VER="
 if exist %1 (
   for /f "tokens=1-5 delims=;" %%1 in ('%1 --version 2^>NUL') do (
     for %%t in ("%%~1" "%%~2" "%%~3" "%%~4" "%%~5") do (
       set "TOKEN=%%~t"
       if defined TOKEN (
+	%ECHOVARS.D% TOKEN
 	if not defined AG_VER (
-	  set "AG_VER=!TOKEN:ag version =!"
-	  if "!AG_VER!"=="!TOKEN!" ( :# It's not the ag version, clear this var
-	    set "AG_VER="
-	  ) else (		     :# It is the ag version, trim this var
-	    for /f "tokens=1" %%v in ("!AG_VER!") do set "AG_VER=%%~v"
+	  for %%x in ("!TOKEN:ag version =!") do if not %%x=="!TOKEN!" (
+	    :# It is the ag version, trim this var
+	    for /f "tokens=1" %%v in (%%x) do set "AG_VER=%%~v"
+	    %ECHOVARS.D% AG_VER
+	  )
+	) else if not defined OS_VER (
+	  for %%x in ("!TOKEN:Windows port =!") do if not %%x=="!TOKEN!" (
+	    :# It is the Windows port version, get the last word = the processor
+	    for /f "tokens=3" %%v in ("!TOKEN:*>=!") do (
+	      set "AG_PROC=%%v"		    &:# The actual processor name
+	      %ECHOVARS.D% AG_PROC
+	      set "OS_VER=!SRCDIR[%%v]!"    &:# The SysToolsLib OS type name
+	      %ECHOVARS.D% OS_VER
+	    )
 	  )
 	)
 	rem Scan component version strings
 	for %%s in ("MSVCLIBX MsvcLibX" "PCRE PCRE" "PTHREADS pthreads4w" "PTHREADS pthread-win32" "ZLIB zlib") do (
 	  for /f "tokens=1,2" %%p in (%%s) do (
 	    if not defined %%p_VER (
-	      set "%%p_VER=!TOKEN:%%q =!"
-	      if "!%%p_VER!"=="!TOKEN!" ( :# It's not that component, clear this var
-		set "%%p_VER="
-	      ) else (			  :# It is that component, trim this var
-		for /f "tokens=1" %%v in ("!%%p_VER!") do set "%%p_VER=%%~v"
+	      for %%x in ("!TOKEN:%%q =!") do if not %%x=="!TOKEN!" (
+	        :# It is that component, trim this var
+		for /f "tokens=1" %%v in (%%x) do set "%%p_VER=%%~v"
+		%ECHOVARS.D% %%p_VER
 	      )
 	    )
 	  )
-	)
-	if not defined OS_VER (
-	  if not "!TOKEN: Win32 =!"=="!TOKEN!" set "OS_VER=WIN32"
-	  if not "!TOKEN: Win64 =!"=="!TOKEN!" set "OS_VER=WIN64"
 	)
       )
     )
   )
 )
-exit /b
+%RETURN%
 
 :SplitVer %1=X.Y.Z.T %2=XVAR %3=YVAR %4=ZVAR %5=TVAR
 for /f "tokens=1-4 delims=-." %%a in ("%~1") do (
@@ -535,6 +572,7 @@ if [%1]==[] goto :start
 if [%1]==[/?] goto :help
 if [%1]==[-?] goto :help
 if [%1]==[-d] call :Debug.on & goto :next_arg
+if [%1]==[-g] call :GetAgVersion %2 & exit /b 0 &:# Test that routine
 if [%1]==[-u] call :UninstallAg & %RETURN%
 if [%1]==[-V] (echo %VERSION%) & exit /b 0
 if [%1]==[-X] set "EXEC=echo" & goto :next_arg
@@ -690,7 +728,8 @@ if "%SILENT%"=="0" (
   for %%f in (%INSTALLED_FILES%) do set "LIST=!LIST!!LF!%%~f"
   :# Double backslashes, as msgbox.exe interprets them on its command line.
   set "MSG=The Silver Searcher was %DONE% successfully.!LIST:\=\\!"
-  if not "%DONE%"=="setup" set "MSG=!MSG!!LF!Please ignore the warning, if any, about 7-Zip not being installed successfully."
+  set "MSG=!MSG!!LF!!LF!Please ignore the possible warning about '7z Setup SFX small' not being installed correctly."
+  set "MSG=!MSG! This '7z Setup SFX small' application is used by Ag setup, but does not get installed."
   %MSGBOX% "!MSG!"
 )
 
