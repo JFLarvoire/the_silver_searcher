@@ -2,20 +2,21 @@
 =============================================
 
 
-2026-04-26 - Version 2.2.7 - Updated libraries and new ARM & ARM64 versions
+2026-05-03 - Version 2.2.7 - Updated libraries and new ARM & ARM64 versions
 ---------------------------------------------------------------------------
 
-Updated several libraries:
+New:
+- This release now includes ARM and ARM64 versions of ag.exe.
+
+Updated libraries:
 - MsvcLibX to version 2026-04-16
 - PCRE to version 8.45 2021-06-15
 - pthread-win32 to version 3.0.3
 - zlib to version 1.3.2
 
-New:
-- This release now includes ARM and ARM64 executables.
-
 Fixed:
-- Bug #7 ".gitignore patterns respected by Linux ag don't work in Windows ag".
+- Bug #7 ".gitignore patterns respected by Linux ag don't work in Windows ag" fixed by the MsvcLibX upgrade.
+- Bug #8 "Where the hell is it?" fixed by ag_setup.exe now displaying a message box in the end, confirming the installation location.
 
 
 2026-03-05 - Version 2.2.6 - Updated MsvcLibX library
